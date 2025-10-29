@@ -4,7 +4,8 @@ class UniversalConsentBehavior {
     try { return /^https?:/.test(window.location.href); } catch { return false; }
   }
   static get runInIframes() { return true; }
-
+  static init() { return new UniversalConsentBehavior(); }
+  
   constructor() {
     this._stop = false;
     this._attempts = 0;
