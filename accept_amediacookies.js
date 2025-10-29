@@ -1,209 +1,134 @@
-class UniversalConsentBehavior {
-  static id = "Universal: Pre-accept and click consent";
+class CookieSetAndRefreshBehavior
+{
+  static id = "CookieSetAndRefresh: UUID + Lax";
+
+  // Begrens gjerne til ett domene, f.eks. blv.no:
+  // static isMatch(){ return /(^|\.)blv\.no$/.test(location.hostname); }
   static isMatch() {
-    try { return /^https?:/.test(window.location.href); } catch { return false; }
-  }
-  static get runInIframes() { return true; }
-  static init() { return new UniversalConsentBehavior(); }
-  
-  constructor() {
-    this._stop = false;
-    this._attempts = 0;
-    this._maxAttempts = 80; // ~16s med 200ms intervall
+    try { return /^https?:/.test(location.href); } catch { return false; }
   }
 
-  async *run(ctx) {
-    const inIframe = window !== window.top;
+  static init() { return new CookieSetAndRefreshBehavior(); }
 
-    yield { state: "consent:init", msg: inIframe ? "Iframe" : "Top" };
+  static runInIframes = false;
 
-    // Lett hint – ikke forsøk å smi leverandør-cookies
-    this.setLightConsentHints();
-
-    // Start mutasjons-observer (fanger sent lastede bannere)
-    const disconnect = this.observeMutations(() => {
-      this.tryClickEverywhereOnce();
-    });
-
-    // Poll i en begrenset periode
-    while (!this._stop && this._attempts < this._maxAttempts) {
-      this._attempts++;
-
-      const clicked = await this.tryClickEverywhereOnce();
-      if (clicked) {
-        yield { state: "consent:clicked", msg: "Fant og klikket knapp" };
-        break;
-      }
-
-      await this.sleep(200);
-    }
-
-    // En siste runde etter liten pause (noen CMP’er åpner trinn 2)
-    await this.sleep(400);
-    await this.tryClickEverywhereOnce();
-
-    disconnect?.();
-    yield { state: "consent:done", msg: "Ferdig" };
+  async awaitPageLoad() {
+    // lite pusterom for å sikre at siden er “idle”
+    await new Promise(r => setTimeout(r, 200));
   }
 
-  async tryClickEverywhereOnce() {
-    // 1) Hoveddokument
-    if (this.findAndClick(document)) return true;
-
-    // 2) Same-origin iframes
-    const iframes = Array.from(document.querySelectorAll("iframe"));
-    for (const iframe of iframes) {
-      try {
-        const doc = iframe.contentDocument || iframe.contentWindow?.document;
-        if (doc && this.findAndClick(doc)) return true;
-      } catch { /* cross-origin – ignorer */ }
-    }
-
-    return false;
-  }
-
-  findAndClick(doc) {
-    // Søk i både vanlige noder og Shadow DOM
-    const candidates = this.queryAllDeep(
-      [
-        // Generiske “godta”-knapper
-        "button",
-        "[role='button']",
-        "a[role='button']",
-        "div[role='button']",
-        "a",
-        "div[onclick]",
-        "span[onclick]",
-
-        // Vanlige CMP-selektorer (bredt men ufarlig)
-        "button[aria-label*='accept' i]",
-        "button[aria-label*='godta' i]",
-        "[title*='accept' i]",
-        "[title*='godta' i]",
-        "[class*='accept-all' i]",
-        "[class*='acceptAll']",
-        "[class*='accept_all']",
-        "[data-choice='11']",
-
-        // OneTrust
-        "#onetrust-accept-btn-handler",
-        "button#onetrust-accept-btn-handler",
-
-        // Cookiebot
-        "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
-        "#CybotCookiebotDialogBodyButtonAccept",
-
-        // Quantcast / SourcePoint (vanligvis “last child”/primærknapp)
-        ".sp_message .sp_choice_type_11",
-        ".sp_message button:last-child",
-        ".message-component button:last-child",
-
-        // Didomi
-        "button[id*='accept-all' i]",
-        "button[data-action*='accept' i]"
-      ],
-      doc
-    );
-
-    const patterns = [
-      /godta\s+alle/i, /godta\s+alt/i, /aksepter\s+alle/i, /tillat\s+alle/i,
-      /accept\s+all/i, /agree\s+to\s+all/i, /allow\s+all/i,
-      /accepter\s+alle/i, /consent\s+to\s+all/i
-    ];
-
-    for (const el of candidates) {
-      if (!this.isVisible(el)) continue;
-
-      const text = this.readableText(el);
-      const title = el.getAttribute?.("title") || "";
-      const aria = el.getAttribute?.("aria-label") || "";
-      const dataText = el.getAttribute?.("data-text") || "";
-      const hay = `${text} ${title} ${aria} ${dataText}`.trim();
-
-      // Treff enten via tekstmønster eller via “kjente” selektorer over
-      if (
-        hay.length > 0 &&
-        (patterns.some(p => p.test(hay)) || this.looksLikePrimaryAccept(el))
-      ) {
-        // Prøv ekte klikksekvens
-        try {
-          el.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
-          el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-          el.click?.();
-          el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-          el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-        } catch {
-          try { el.click?.(); } catch {}
-        }
-        return true;
-      }
-    }
-    return false;
-  }
-
-  looksLikePrimaryAccept(el) {
-    const cls = (el.className || "").toString();
-    // Enkle heuristikker for “primærknapp”
-    return /\b(primary|confirm|allow|accept|positive)\b/i.test(cls);
-  }
-
-  isVisible(el) {
-    if (!el || typeof el.getBoundingClientRect !== "function") return false;
-    const r = el.getBoundingClientRect();
-    const styles = window.getComputedStyle?.(el);
-    return (
-      r.width > 0 &&
-      r.height > 0 &&
-      styles &&
-      styles.visibility !== "hidden" &&
-      styles.display !== "none" &&
-      styles.pointerEvents !== "none"
-    );
-  }
-
-  // Dyp query som også går inn i Shadow DOM
-  queryAllDeep(selectors, rootDoc) {
-    const out = [];
-    const walker = (root) => {
-      if (!root) return;
-      try {
-        for (const sel of selectors) {
-          root.querySelectorAll?.(sel)?.forEach((n) => out.push(n));
-        }
-      } catch { /* querySelectorAll kan kaste på rare roots */ }
-
-      // Gå gjennom alle elementer og åpne shadow roots
-      const tree = root.querySelectorAll ? root.querySelectorAll("*") : [];
-      for (const el of tree) {
-        if (el.shadowRoot) walker(el.shadowRoot);
-      }
+  async* run(ctx) {
+    const makeState = (state, data) => {
+      const payload = { state, data };
+      if (ctx?.Lib?.getState) return ctx.Lib.getState(payload);
+      if (ctx?.getState)      return ctx.getState(payload);
+      return payload;
     };
-    walker(rootDoc);
-    return out;
-  }
 
-  observeMutations(onChange) {
+    // ---------------------- KONFIGURASJON ----------------------
+    // Overstyr om du vil tvinge et spesifikt domain (f.eks. ".blv.no"):
+    const domainOverride = null; // sett til ".blv.no" eller "www.blv.no" ved behov
+
+    // Hvor lenge skal cookies leve?
+    const daysDefault = 365;
+
+    // Generér verdier
+    const uuid = this.uuidv4();
+    const nowIso = new Date().toISOString();
+
+    // Cookies du vil sette (SameSite=Lax på alle som ønsket)
+    const cookies = [
+      {
+        name: "consentUUID",
+        value: uuid,
+        path: "/",
+        domain: domainOverride, // hvis null -> settes uten Domain (host-only)
+        days: daysDefault,
+        sameSite: "Lax",
+        secure: false           // Lax krever ikke Secure; sett true hvis du vil
+      },
+      {
+        name: "consentDate",
+        value: nowIso,
+        path: "/",
+        domain: domainOverride,
+        days: daysDefault,
+        sameSite: "Lax",
+        secure: false
+      }
+    ];
+    // -----------------------------------------------------------
+
+    const ONCE_KEY = "__bx_cookie_refresh_done";
+
     try {
-      const obs = new MutationObserver(() => onChange?.());
-      obs.observe(document.documentElement || document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true
-      });
-      return () => { try { obs.disconnect(); } catch {} };
-    } catch {
-      return () => {};
+      if (sessionStorage.getItem(ONCE_KEY) === "1") {
+        yield makeState("cookie: already refreshed", { url: location.href });
+        return;
+      }
+    } catch {}
+
+    // Sett cookies
+    let setCount = 0;
+    for (const c of cookies) {
+      try {
+        const parts = [];
+        parts.push(`${c.name}=${encodeURIComponent(String(c.value ?? ""))}`);
+
+        if (typeof c.days === "number") {
+          const exp = new Date(Date.now() + c.days * 864e5).toUTCString();
+          parts.push(`Expires=${exp}`);
+          parts.push(`Max-Age=${Math.floor(c.days * 86400)}`);
+        }
+
+        parts.push(`Path=${c.path || "/"}`);
+
+        // Domain: bare legg til hvis du eksplisitt vil – ellers blir det host-only
+        if (c.domain) parts.push(`Domain=${c.domain}`);
+
+        // SameSite = Lax (som ønsket)
+        parts.push(`SameSite=${c.sameSite || "Lax"}`);
+
+        // Secure: valgfritt for Lax; aktiver hvis du vil og siden er https
+        if (c.secure && location.protocol === "https:") parts.push("Secure");
+
+        document.cookie = parts.join("; ");
+        setCount++;
+      } catch {}
     }
-  }
 
-  setLightConsentHints() {
+    yield makeState("cookie: set", { count: setCount, url: location.href, uuid });
+
+    try { sessionStorage.setItem(ONCE_KEY, "1"); } catch {}
+
+    // Gjør én refresh slik at nye cookies blir med i neste request
     try {
-      // Kun ufarlige hints – noen CMP’er plukker opp dette
-      localStorage.setItem("cookieConsent", "accepted");
-      localStorage.setItem("gdprConsent", "true");
-      localStorage.setItem("_sp_v1_consent", "1");
+      location.reload();
+      setTimeout(() => { location.replace(location.href); }, 1500);
     } catch {}
   }
 
-  sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+  // RFC4122 v4 – random-basert UUID
+  uuidv4() {
+    // Bruk crypto hvis tilgjengelig
+    if (crypto && crypto.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      // Per RFC: set versjon og variant
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = [...bytes].map(b => b.toString(16).padStart(2, "0")).join("");
+      return (
+        hex.slice(0,8) + "-" +
+        hex.slice(8,12) + "-" +
+        hex.slice(12,16) + "-" +
+        hex.slice(16,20) + "-" +
+        hex.slice(20)
+      );
+    }
+    // Fallback (ikke kryptografisk)
+    const rnd = () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
+    const a = rnd(), b = rnd(), c = rnd(), d = rnd();
+    return `${a.slice(0,8)}-${b.slice(0,4)}-4${b.slice(5,8)}-${(8 + Math.random()*4|0).toString(16)}${c.slice(1,3)}-${c.slice(3)}${d}`;
+  }
 }
