@@ -1,8 +1,7 @@
 class UniversalConsentBehavior {
-  static id = "Universal: Pre-accept consent (with iframe support)";
+  static id = "Universal: Pre-accept and click consent";
   
   static isMatch() {
-    // Matcher ALLE http/https sider OG iframe-innhold
     return /^https?:/.test(window.location.href);
   }
 
@@ -10,102 +9,217 @@ class UniversalConsentBehavior {
     return new UniversalConsentBehavior();
   }
 
-  // VIKTIG: Kjør også i iframes!
   static runInIframes = true;
 
   async awaitPageLoad() {
+    // Sett cookies med en gang
     this.setConsentCookies();
     
-    // Hvis vi er i hovedvinduet, håndter også iframes
+    // Vent litt, så prøv å klikke
+    await this.wait(1500);
+    
     if (window === window.top) {
-      await this.handleIframes();
+      await this.clickConsentButtons();
     }
   }
 
   async* run(ctx) {
     const isIframe = window !== window.top;
-    const location = isIframe ? 'iframe' : 'main';
     
     yield ctx.Lib.getState({ 
       state: "consent: setting", 
-      msg: `Setter consent-cookies (${location})` 
+      msg: isIframe ? "Setter i iframe" : "Setter consent" 
     });
 
     this.setConsentCookies();
     
+    await this.wait(1500);
+    
     if (!isIframe) {
-      await this.handleIframes();
+      yield ctx.Lib.getState({ 
+        state: "consent: clicking", 
+        msg: "Søker etter knapper" 
+      });
+      
+      const clicked = await this.clickConsentButtons();
+      
+      yield ctx.Lib.getState({ 
+        state: "consent: done", 
+        msg: clicked ? "Klikket knapp" : "Ingen knapp funnet" 
+      });
+    } else {
+      // Vi er i iframe, prøv å klikke her også
+      await this.clickInIframe();
+      
+      yield ctx.Lib.getState({ 
+        state: "consent: done", 
+        msg: "Håndtert i iframe" 
+      });
     }
-
-    yield ctx.Lib.getState({ 
-      state: "consent: done", 
-      msg: `Consent-cookies satt (${location})` 
-    });
   }
 
-  async handleIframes() {
-    // Vent på at iframes lastes
-    await this.wait(1000);
+  async clickConsentButtons() {
+    const maxAttempts = 50; // 10 sekunder
     
-    // Prøv å kommunisere med consent-iframes via postMessage
-    const iframes = document.querySelectorAll('iframe');
-    
-    for (const iframe of iframes) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        const src = iframe.src || '';
+        // 1. Søk i hovedvinduet
+        if (this.findAndClick(document)) {
+          console.log('✓ Klikket i hovedvindu');
+          await this.wait(500);
+          return true;
+        }
         
-        // Identifiser consent-iframes
-        if (src.includes('sp.api.no') || 
-            src.includes('sourcepoint') || 
-            src.includes('consent') ||
-            src.includes('privacy') ||
-            src.includes('gdpr')) {
+        // 2. Søk i alle iframes
+        const iframes = document.querySelectorAll('iframe');
+        for (const iframe of iframes) {
+          try {
+            const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+            if (iframeDoc && this.findAndClick(iframeDoc)) {
+              console.log('✓ Klikket i same-origin iframe');
+              await this.wait(500);
+              return true;
+            }
+          } catch (e) {
+            // Cross-origin iframe - kan ikke aksessere
+          }
+        }
+        
+      } catch (e) {
+        console.debug('Klikk-forsøk feilet:', e);
+      }
+      
+      await this.wait(200);
+    }
+    
+    console.log('⚠ Fant ikke consent-knapp etter 10 sekunder');
+    return false;
+  }
+
+  async clickInIframe() {
+    // Vi er INNE i consent-iframe
+    const maxAttempts = 50;
+    
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (this.findAndClick(document)) {
+        console.log('✓ Klikket i consent-iframe');
+        await this.wait(500);
+        return true;
+      }
+      await this.wait(200);
+    }
+    
+    console.log('⚠ Fant ikke knapp i iframe');
+    return false;
+  }
+
+  findAndClick(doc) {
+    // Søk etter "Godta alle" / "Accept all" knapper
+    const patterns = [
+      /godta\s+alle/i,
+      /godta\s+alt/i,
+      /accept\s+all/i,
+      /accepter\s+alle/i,
+      /samtykke\s+til\s+alle/i,
+      /tillat\s+alle/i,
+      /agree\s+to\s+all/i,
+      /consent\s+to\s+all/i,
+      /aksepter\s+alle/i,
+      /allow\s+all/i
+    ];
+    
+    // Søk i buttons og button-lignende elementer
+    const selectors = [
+      'button',
+      '[role="button"]',
+      'a[role="button"]',
+      'div[role="button"]',
+      'span[role="button"]',
+      'a',
+      'div[onclick]',
+      'span[onclick]'
+    ];
+    
+    for (const selector of selectors) {
+      try {
+        const elements = Array.from(doc.querySelectorAll(selector));
+        
+        for (const el of elements) {
+          const text = (el.textContent || el.innerText || '').trim();
+          const title = el.getAttribute('title') || '';
+          const ariaLabel = el.getAttribute('aria-label') || '';
+          const dataText = el.getAttribute('data-text') || '';
+          const combinedText = `${text} ${title} ${ariaLabel} ${dataText}`;
           
-          console.log('Fant consent-iframe:', src);
-          
-          // Send "accept all" kommando via postMessage
-          if (iframe.contentWindow) {
-            const messages = [
-              { type: 'consent.accept', action: 'acceptAll' },
-              { name: 'sp.acceptAll' },
-              { consent: 'accept', all: true },
-              { action: 'acceptAllConsent' },
-              { command: 'consent.accept' }
-            ];
-            
-            for (const msg of messages) {
-              try {
-                iframe.contentWindow.postMessage(msg, '*');
-              } catch (e) {
-                console.debug('PostMessage feilet:', e);
+          // Sjekk om teksten matcher
+          for (const pattern of patterns) {
+            if (pattern.test(combinedText)) {
+              const rect = el.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                const visibleText = text.substring(0, 50);
+                console.log('Fant knapp:', visibleText || ariaLabel || title);
+                
+                // Prøv flere typer klikk
+                el.click();
+                
+                // Dispatch mouse events også
+                try {
+                  el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                  el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                  el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                } catch (e) {}
+                
+                return true;
               }
             }
           }
         }
-        
-        // Prøv å sette cookies i iframe (hvis samme origin)
-        try {
-          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-          if (iframeDoc) {
-            console.log('Setter cookies i iframe (same-origin)');
-            this.setConsentCookiesInDocument(iframeDoc);
-          }
-        } catch (e) {
-          // Cross-origin, kan ikke aksessere
-          console.debug('Iframe er cross-origin, bruker postMessage');
-        }
-        
       } catch (e) {
-        console.debug('Iframe-håndtering feilet:', e);
+        console.debug(`Søk i ${selector} feilet:`, e);
       }
     }
+    
+    // Søk etter SourcePoint-spesifikke attributter og klasser
+    const spSelectors = [
+      '[title*="Accept all" i]',
+      '[title*="Godta alle" i]',
+      '.sp_choice_type_11',
+      '[class*="accept-all"]',
+      '[class*="acceptAll"]',
+      '[class*="accept_all"]',
+      '[data-choice="11"]',
+      'button[aria-label*="Accept all" i]',
+      'button[aria-label*="Godta alle" i]',
+      '[class*="message-button"]:last-child', // Ofte siste knapp
+      '.message-component button:last-child'
+    ];
+    
+    for (const selector of spSelectors) {
+      try {
+        const el = doc.querySelector(selector);
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            console.log('Fant SP-element:', selector);
+            
+            el.click();
+            
+            try {
+              el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+              el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+              el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            } catch (e) {}
+            
+            return true;
+          }
+        }
+      } catch (e) {}
+    }
+    
+    return false;
   }
 
   setConsentCookies() {
-    this.setConsentCookiesInDocument(document);
-  }
-
-  setConsentCookiesInDocument(doc) {
     try {
       const hostname = window.location.hostname;
       const domain = hostname.replace('www.', '');
@@ -114,11 +228,10 @@ class UniversalConsentBehavior {
       expire.setFullYear(expire.getFullYear() + 1);
       const expireStr = expire.toUTCString();
       
-      // Generer unike ID-er
       const timestamp = Date.now();
       const uuid = this.generateUUID();
       
-      // TCF v2.0 / IAB Consent string (full accept)
+      // TCF v2.0 consent string (full accept)
       const euconsentString = 'CQaDXoAQaDXoAAGABCENCCFgALAAAELAABpwJpQGYAFAAWABUADwAIAAZAA0ACYAE4AQgA0QB-gERAJEAUkA0wCkwFvALhAXmAxkBlgDVwHLgRmAmkCb8B2ABQAFgAVAA8ACAAGQANAAfgBMACcAH4AQgA0QB-gERAIsASIA80CZAJlAUmAtkBbwC8wGMgMsAauA5cB_YEZgJvgFBgBwACwAKgAeABBADIANAAmABOAEIANEAfoBIgGMgNXAjMIAAgLhCgBAAFADRAYyBGYIACACcAuEeAJAAUAB4AH4ATgCIgHmAW8AxkCMw4AKAIQApIBpgFwgTSJgAgFvAMZJAAwBCAD9AjMVACgAKATKAt4BjIEZigAIAQgDlwAA.dgAACEAAAAAA';
       
       const cookies = [
@@ -133,12 +246,11 @@ class UniversalConsentBehavior {
         `ccpaApplies=false`,
         
         // OneTrust
-        `OptanonConsent=isGpcEnabled=0&datestamp=${now.toISOString()}&version=6.17.0&isIABGlobal=false&hosts=&consentId=${uuid}&interactionCount=1&landingPath=NotLandingPage&groups=C0001:1,C0002:1,C0003:1,C0004:1,C0005:1`,
+        `OptanonConsent=isGpcEnabled=0&datestamp=${now.toISOString()}&version=6.17.0&groups=C0001:1,C0002:1,C0003:1,C0004:1,C0005:1`,
         `OptanonAlertBoxClosed=${now.toISOString()}`,
         
         // Cookiebot
-        `CookieConsent={stamp:'${timestamp}',necessary:true,preferences:true,statistics:true,marketing:true,method:'explicit',ver:1}`,
-        `CookieConsentBulkSetting={stamp:'${timestamp}',all:true}`,
+        `CookieConsent={stamp:'${timestamp}',necessary:true,preferences:true,statistics:true,marketing:true,all:true}`,
         
         // Quantcast
         `__qca=P0-${timestamp}-${timestamp}`,
@@ -146,39 +258,6 @@ class UniversalConsentBehavior {
         
         // Didomi
         `didomi_token=accepted`,
-        
-        // TrustArc
-        `notice_preferences=2:1a8b${this.generateRandomId(10)}`,
-        `notice_gdpr_prefs=0,1,2:1a8b${this.generateRandomId(10)}`,
-        `cmapi_cookie_privacy=permit 1,2,3`,
-        
-        // Osano
-        `osano_consentmanager=ACCEPT`,
-        `osano_consentmanager_uuid=${uuid}`,
-        
-        // Cookie Information
-        `CookieInformationConsent={"website_uuid":"${uuid}","consent_url":"accepted","consents_approved":["cookie_cat_necessary","cookie_cat_functional","cookie_cat_statistic","cookie_cat_marketing"]}`,
-        
-        // Klaro
-        `klaro={stamp:'${timestamp}',version:1,all:true}`,
-        
-        // Termly
-        `termly_consent={"preferences":true,"statistics":true,"marketing":true}`,
-        
-        // Complianz
-        `cmplz_all=allow`,
-        `cmplz_marketing=allow`,
-        `cmplz_statistics=allow`,
-        `cmplz_banner-status=dismissed`,
-        
-        // CookieYes
-        `cookieyes-consent=consentid:${uuid},consent:yes,action:accept`,
-        
-        // Usercentrics
-        `uc_settings={"version":1,"consent":{"google_analytics":true,"facebook":true}}`,
-        
-        // Google Consent Mode
-        `CONSENT=YES+cb.${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${this.generateRandomId(8)}`,
         
         // Google Ad cookies
         `__eoi=ID=${this.generateRandomId()}:T=${Math.floor(timestamp/1000)}:RT=${Math.floor(timestamp/1000)}:S=AA-${this.generateRandomString(20)}`,
@@ -188,7 +267,7 @@ class UniversalConsentBehavior {
         // Amedia
         `amedia:visitid=${uuid}|${timestamp}`,
         
-        // LiveIntent / Prebid
+        // Prebid
         `lwuid=gnlw${this.generateRandomId()}-${this.generateUUIDSection()}-${this.generateUUIDSection()}-${this.generateUUIDSection()}-${this.generateRandomId(12)}`,
         `pbjs_sharedId=${this.generateUUID()}`,
         `pbjs_sharedId_cst=${encodeURIComponent('OiwMLEYsVA==')}`,
@@ -196,86 +275,45 @@ class UniversalConsentBehavior {
         // Generiske
         `cookie_consent=all`,
         `cookie_consent_level=all`,
-        `cookie_accepted=true`,
         `cookies_accepted=true`,
         `cookieconsent_status=allow`,
-        `cookieconsent_status=dismiss`,
-        `cookieconsent_dismissed=yes`,
         `gdpr_consent=true`,
         `privacy_consent=accepted`,
-        `consent=1`,
-        `hasConsent=true`,
-        `accepted_cookies=all`,
-        `cookies_policy=accepted`,
-        `cookie_notice_accepted=true`,
-        `cookie_bar_dismissed=true`,
-        `privacy_policy_accepted=true`,
-        `tracking_consent=true`,
-        `analytics_consent=true`,
-        `marketing_consent=true`,
-        `functional_consent=true`
+        `hasConsent=true`
       ];
       
-      // Sett cookies i dokumentet
+      // Sett alle cookies
       for (const cookie of cookies) {
         // Med domene
-        doc.cookie = `${cookie}; expires=${expireStr}; path=/; domain=.${domain}; SameSite=Lax`;
+        document.cookie = `${cookie}; expires=${expireStr}; path=/; domain=.${domain}; SameSite=Lax`;
         
         // Uten domene
-        doc.cookie = `${cookie}; expires=${expireStr}; path=/; SameSite=Lax`;
+        document.cookie = `${cookie}; expires=${expireStr}; path=/; SameSite=Lax`;
         
         // Secure på HTTPS
         if (window.location.protocol === 'https:') {
-          doc.cookie = `${cookie}; expires=${expireStr}; path=/; domain=.${domain}; Secure; SameSite=None`;
-          doc.cookie = `${cookie}; expires=${expireStr}; path=/; Secure; SameSite=None`;
+          document.cookie = `${cookie}; expires=${expireStr}; path=/; domain=.${domain}; Secure; SameSite=None`;
+          document.cookie = `${cookie}; expires=${expireStr}; path=/; Secure; SameSite=None`;
         }
       }
       
       // LocalStorage
       try {
-        const storageData = {
-          'consentUUID': `${uuid}_49`,
-          'consentDate': now.toISOString(),
-          'euconsent-v2': euconsentString,
-          '_sp_v1_consent': '1',
-          '_sp_v1_opt_out': 'false',
-          '_sp_v1_data': 'accepted',
-          'OptanonConsent': JSON.stringify({
-            datestamp: now.toISOString(),
-            version: '6.17.0',
-            interactionCount: 1,
-            groups: 'C0001:1,C0002:1,C0003:1,C0004:1,C0005:1'
-          }),
-          'OptanonAlertBoxClosed': now.toISOString(),
-          'CookieConsent': JSON.stringify({
-            all: true,
-            necessary: true,
-            preferences: true,
-            statistics: true,
-            marketing: true
-          }),
-          'didomi_token': 'accepted',
-          'cookieConsent': 'accepted',
-          'gdprConsent': 'true',
-          'cookie_consent': 'all',
-          'hasConsent': 'true',
-          'cookies_accepted': 'true',
-          'privacy_policy_accepted': 'true'
-        };
-        
-        for (const [key, value] of Object.entries(storageData)) {
-          localStorage.setItem(key, value);
-          sessionStorage.setItem(key, value);
-        }
+        localStorage.setItem('consentUUID', `${uuid}_49`);
+        localStorage.setItem('consentDate', now.toISOString());
+        localStorage.setItem('euconsent-v2', euconsentString);
+        localStorage.setItem('_sp_v1_consent', '1');
+        localStorage.setItem('_sp_v1_opt_out', 'false');
+        localStorage.setItem('_sp_v1_data', 'accepted');
+        localStorage.setItem('gdprConsent', 'true');
+        localStorage.setItem('cookieConsent', 'accepted');
       } catch (e) {
-        console.debug('Storage ikke tilgjengelig:', e);
+        console.debug('LocalStorage ikke tilgjengelig');
       }
       
-      const context = doc === document ? window.location.hostname : 'iframe';
-      console.log('✓ Satte consent-cookies for:', context);
-      
+      console.log('✓ Satte consent-cookies for:', domain);
     } catch (e) {
-      console.debug('Consent cookie-setting feilet:', e);
+      console.debug('Cookie-setting feilet:', e);
     }
   }
 
@@ -283,7 +321,6 @@ class UniversalConsentBehavior {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  // Helper-funksjoner
   generateUUID() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
       const r = Math.random() * 16 | 0;
