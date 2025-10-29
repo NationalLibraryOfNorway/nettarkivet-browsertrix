@@ -1,8 +1,8 @@
 class UniversalConsentBehavior {
-  static id = "Universal: Pre-accept consent (exact cookies)";
+  static id = "Universal: Pre-accept consent (with iframe support)";
   
   static isMatch() {
-    // Matcher ALLE http/https sider
+    // Matcher ALLE http/https sider OG iframe-innhold
     return /^https?:/.test(window.location.href);
   }
 
@@ -10,27 +10,102 @@ class UniversalConsentBehavior {
     return new UniversalConsentBehavior();
   }
 
-  static runInIframes = false;
+  // VIKTIG: Kjør også i iframes!
+  static runInIframes = true;
 
   async awaitPageLoad() {
     this.setConsentCookies();
+    
+    // Hvis vi er i hovedvinduet, håndter også iframes
+    if (window === window.top) {
+      await this.handleIframes();
+    }
   }
 
   async* run(ctx) {
+    const isIframe = window !== window.top;
+    const location = isIframe ? 'iframe' : 'main';
+    
     yield ctx.Lib.getState({ 
       state: "consent: setting", 
-      msg: "Setter consent-cookies" 
+      msg: `Setter consent-cookies (${location})` 
     });
 
     this.setConsentCookies();
+    
+    if (!isIframe) {
+      await this.handleIframes();
+    }
 
     yield ctx.Lib.getState({ 
       state: "consent: done", 
-      msg: "Consent-cookies satt" 
+      msg: `Consent-cookies satt (${location})` 
     });
   }
 
+  async handleIframes() {
+    // Vent på at iframes lastes
+    await this.wait(1000);
+    
+    // Prøv å kommunisere med consent-iframes via postMessage
+    const iframes = document.querySelectorAll('iframe');
+    
+    for (const iframe of iframes) {
+      try {
+        const src = iframe.src || '';
+        
+        // Identifiser consent-iframes
+        if (src.includes('sp.api.no') || 
+            src.includes('sourcepoint') || 
+            src.includes('consent') ||
+            src.includes('privacy') ||
+            src.includes('gdpr')) {
+          
+          console.log('Fant consent-iframe:', src);
+          
+          // Send "accept all" kommando via postMessage
+          if (iframe.contentWindow) {
+            const messages = [
+              { type: 'consent.accept', action: 'acceptAll' },
+              { name: 'sp.acceptAll' },
+              { consent: 'accept', all: true },
+              { action: 'acceptAllConsent' },
+              { command: 'consent.accept' }
+            ];
+            
+            for (const msg of messages) {
+              try {
+                iframe.contentWindow.postMessage(msg, '*');
+              } catch (e) {
+                console.debug('PostMessage feilet:', e);
+              }
+            }
+          }
+        }
+        
+        // Prøv å sette cookies i iframe (hvis samme origin)
+        try {
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+          if (iframeDoc) {
+            console.log('Setter cookies i iframe (same-origin)');
+            this.setConsentCookiesInDocument(iframeDoc);
+          }
+        } catch (e) {
+          // Cross-origin, kan ikke aksessere
+          console.debug('Iframe er cross-origin, bruker postMessage');
+        }
+        
+      } catch (e) {
+        console.debug('Iframe-håndtering feilet:', e);
+      }
+    }
+  }
+
   setConsentCookies() {
+    this.setConsentCookiesInDocument(document);
+  }
+
+  setConsentCookiesInDocument(doc) {
     try {
       const hostname = window.location.hostname;
       const domain = hostname.replace('www.', '');
@@ -43,9 +118,7 @@ class UniversalConsentBehavior {
       const timestamp = Date.now();
       const uuid = this.generateUUID();
       
-      // KRITISKE CONSENT-COOKIES
-      
-      // 1. TCF v2.0 / IAB Consent (SourcePoint, OneTrust, Quantcast, etc)
+      // TCF v2.0 / IAB Consent string (full accept)
       const euconsentString = 'CQaDXoAQaDXoAAGABCENCCFgALAAAELAABpwJpQGYAFAAWABUADwAIAAZAA0ACYAE4AQgA0QB-gERAJEAUkA0wCkwFvALhAXmAxkBlgDVwHLgRmAmkCb8B2ABQAFgAVAA8ACAAGQANAAfgBMACcAH4AQgA0QB-gERAIsASIA80CZAJlAUmAtkBbwC8wGMgMsAauA5cB_YEZgJvgFBgBwACwAKgAeABBADIANAAmABOAEIANEAfoBIgGMgNXAjMIAAgLhCgBAAFADRAYyBGYIACACcAuEeAJAAUAB4AH4ATgCIgHmAW8AxkCMw4AKAIQApIBpgFwgTSJgAgFvAMZJAAwBCAD9AjMVACgAKATKAt4BjIEZigAIAQgDlwAA.dgAACEAAAAAA';
       
       const cookies = [
@@ -107,12 +180,12 @@ class UniversalConsentBehavior {
         // Google Consent Mode
         `CONSENT=YES+cb.${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${this.generateRandomId(8)}`,
         
-        // Google Ad cookies (settes etter consent)
+        // Google Ad cookies
         `__eoi=ID=${this.generateRandomId()}:T=${Math.floor(timestamp/1000)}:RT=${Math.floor(timestamp/1000)}:S=AA-${this.generateRandomString(20)}`,
         `__gads=ID=${this.generateRandomId()}:T=${Math.floor(timestamp/1000)}:RT=${Math.floor(timestamp/1000)}:S=ALNI_${this.generateRandomString(30)}`,
         `__gpi=UID=${this.generateRandomId(12)}:T=${Math.floor(timestamp/1000)}:RT=${Math.floor(timestamp/1000)}:S=ALNI_${this.generateRandomString(30)}`,
         
-        // Amedia-spesifikke (for norske aviser)
+        // Amedia
         `amedia:visitid=${uuid}|${timestamp}`,
         
         // LiveIntent / Prebid
@@ -143,33 +216,30 @@ class UniversalConsentBehavior {
         `functional_consent=true`
       ];
       
-      // Sett alle cookies med multiple strategier
+      // Sett cookies i dokumentet
       for (const cookie of cookies) {
-        // Med domene (for subdomener)
-        document.cookie = `${cookie}; expires=${expireStr}; path=/; domain=.${domain}; SameSite=Lax`;
+        // Med domene
+        doc.cookie = `${cookie}; expires=${expireStr}; path=/; domain=.${domain}; SameSite=Lax`;
         
-        // Uten domene (for nåværende host)
-        document.cookie = `${cookie}; expires=${expireStr}; path=/; SameSite=Lax`;
+        // Uten domene
+        doc.cookie = `${cookie}; expires=${expireStr}; path=/; SameSite=Lax`;
         
         // Secure på HTTPS
         if (window.location.protocol === 'https:') {
-          document.cookie = `${cookie}; expires=${expireStr}; path=/; domain=.${domain}; Secure; SameSite=None`;
-          document.cookie = `${cookie}; expires=${expireStr}; path=/; Secure; SameSite=None`;
+          doc.cookie = `${cookie}; expires=${expireStr}; path=/; domain=.${domain}; Secure; SameSite=None`;
+          doc.cookie = `${cookie}; expires=${expireStr}; path=/; Secure; SameSite=None`;
         }
       }
       
-      // LocalStorage (hvis tilgjengelig)
+      // LocalStorage
       try {
         const storageData = {
-          // SourcePoint
           'consentUUID': `${uuid}_49`,
           'consentDate': now.toISOString(),
           'euconsent-v2': euconsentString,
           '_sp_v1_consent': '1',
           '_sp_v1_opt_out': 'false',
           '_sp_v1_data': 'accepted',
-          
-          // OneTrust
           'OptanonConsent': JSON.stringify({
             datestamp: now.toISOString(),
             version: '6.17.0',
@@ -177,33 +247,20 @@ class UniversalConsentBehavior {
             groups: 'C0001:1,C0002:1,C0003:1,C0004:1,C0005:1'
           }),
           'OptanonAlertBoxClosed': now.toISOString(),
-          
-          // Cookiebot
           'CookieConsent': JSON.stringify({
             all: true,
             necessary: true,
             preferences: true,
             statistics: true,
-            marketing: true,
-            stamp: timestamp
+            marketing: true
           }),
-          
-          // Didomi
           'didomi_token': 'accepted',
-          'didomi_consent': JSON.stringify({
-            purposes: {enabled: true},
-            vendors: {enabled: true}
-          }),
-          
-          // Generiske
           'cookieConsent': 'accepted',
           'gdprConsent': 'true',
           'cookie_consent': 'all',
           'hasConsent': 'true',
           'cookies_accepted': 'true',
-          'privacy_policy_accepted': 'true',
-          'consent_given': 'true',
-          'all_consent': 'true'
+          'privacy_policy_accepted': 'true'
         };
         
         for (const [key, value] of Object.entries(storageData)) {
@@ -214,10 +271,16 @@ class UniversalConsentBehavior {
         console.debug('Storage ikke tilgjengelig:', e);
       }
       
-      console.log('✓ Satte universelle consent-cookies for:', domain);
+      const context = doc === document ? window.location.hostname : 'iframe';
+      console.log('✓ Satte consent-cookies for:', context);
+      
     } catch (e) {
       console.debug('Consent cookie-setting feilet:', e);
     }
+  }
+
+  async wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   // Helper-funksjoner
