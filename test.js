@@ -1,6 +1,6 @@
 class ScrollAndClickBehavior
 {
-  static id = "ScrollAndClick: Complete Browsertrix Logic";
+  static id = "ScrollAndClick: Complete Browsertrix Logic (Final)";
   
   seenElements = new WeakSet(); 
   
@@ -20,28 +20,34 @@ class ScrollAndClickBehavior
   // --- Opprydding og Scroll Fix ---
   
   async awaitPageLoad() {
-    this.removeConsentOverlay();
+    this.removeConsentOverlay(); // ⬅️ BRUKER DIN SPESIFIKKE VERSJON
     this.fixScroll();
     await new Promise(r => setTimeout(r, 500));
   }
   
+  // 🎯 DIN SPESIFIKKE FUNKSJON FOR FJERNING AV OVERLAYS 🎯
   removeConsentOverlay() {
     try {
-      const selectors = [ '[id*="sp_message"]', '[class*="sp_message"]', '[id*="cookie"]', '[class*="cookie"]', '[id*="consent"]', '[class*="consent"]', 'iframe[src*="sp.api.no"]', 'iframe[src*="sourcepoint"]', 'iframe[src*="consent"]' ];
-      document.querySelectorAll(selectors.join(', ')).forEach(el => { el.remove(); });
-      const possibleBackdrops = document.querySelectorAll('div[style*="position: fixed"][style*="z-index"]');
-      possibleBackdrops.forEach(el => {
-          if (el.innerText.length < 50 || el.innerText.includes("cookie") || el.innerText.includes("samtykke")) { el.remove(); }
-      });
+      // Fjern SourcePoint/consent iframes
+      const consentIframes = document.querySelectorAll('iframe[src*="sp.api.no"], iframe[src*="sourcepoint"], iframe[src*="consent"]');
+      consentIframes.forEach(iframe => iframe.remove());
+       
+      // Fjern overlays (inkludert høy z-index og sp_message)
+      const overlays = document.querySelectorAll('[id*="sp_message"], [class*="sp_message"], div[style*="z-index: 2147483647"]');
+      overlays.forEach(el => el.remove());
+      
+      // Gjenoppretter scrolling på body og html (fra robust versjon)
       document.body.style.overflow = 'auto';
       document.body.style.position = 'static';
       document.documentElement.style.overflow = 'auto';
+
     } catch (e) {
-      console.error('[Bx] Feil under fjerning av overlays:', e);
+      console.debug('Overlay removal error:', e);
     }
   }
   
   fixScroll() {
+    // Beholdt den robuste Scroll Fix-logikken
     try {
       document.body.removeAttribute('style');
       document.documentElement.removeAttribute('style');
@@ -50,6 +56,7 @@ class ScrollAndClickBehavior
       document.body.style.setProperty('height', 'auto', 'important');
       document.body.style.setProperty('width', 'auto', 'important');
       document.documentElement.style.setProperty('overflow', 'auto', 'important');
+      
       if (!document.getElementById('force-scroll-fix')) {
         const style = document.createElement('style');
         style.id = 'force-scroll-fix';
@@ -78,7 +85,7 @@ class ScrollAndClickBehavior
     }
   }
 
-  // --- KLIKK-FUNKSJONALITET (FOKUS PÅ INNHOLDSUTVIDELSE) ---
+  // --- KLIKK-FUNKSJONALITET ---
   
   async clickAllA(ctx) {
     let clicks = 0;
@@ -147,7 +154,7 @@ class ScrollAndClickBehavior
     return clicks;
   }
 
-  // --- HOVEDUTFØRELSE (MED ROBUST SCROLLING OG NAVIGATION LYTTER) ---
+  // --- HOVEDUTFØRELSE ---
 
   async* run(ctx) {
     const makeState = (state, data) => {
@@ -261,41 +268,3 @@ class ScrollAndClickBehavior
   }
 }
 
-
-// --- START SKRIPTET (Wrapper for Chrome Console) ---
-(async function() {
-    console.log("--- Bx Scroll and Click Initiert ---");
-    
-    // Simulerer Browsertrix-miljøet (ctx)
-    const ctx = {
-        Lib: {
-            // Asynkrone funksjoner
-            sleep: (ms) => new Promise(r => setTimeout(r, ms)),
-            getState: (payload) => payload
-        },
-        log: (data) => console.log(`[Bx Log] ${data.msg}`, data) 
-    };
-
-    if (!ScrollAndClickBehavior.isMatch()) {
-        console.log("URL matcher ikke ScrollAndClickBehavior. Avslutter.");
-        return;
-    }
-    
-    const behavior = ScrollAndClickBehavior.init();
-    await behavior.awaitPageLoad();
-
-    // Kjører den asynkrone generatorfunksjonen
-    const generator = behavior.run(ctx);
-    let result = await generator.next();
-
-    while (!result.done) {
-        if (result.value instanceof Promise) {
-            await result.value; 
-        }
-        console.log(`[Bx State]`, result.value);
-        result = await generator.next();
-    }
-
-    console.log("--- Bx Scroll and Click Fullført ---");
-    console.log("Endelig Tilstand:", result.value);
-})();
