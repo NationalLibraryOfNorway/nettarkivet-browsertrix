@@ -10,6 +10,9 @@ class AutoScrollBehavior
   }
   static runInIframes = false;
   
+  // NY VARIABEL: For å spore hvilke knapper som allerede er klikket
+  seenClickElem = new WeakSet();
+
   async awaitPageLoad() {
     // Fjern consent overlay og fiks scroll
     this.removeConsentOverlay();
@@ -66,16 +69,17 @@ class AutoScrollBehavior
   
   /**
    * Finner og klikker på en "Last inn mer"-knapp.
+   * Bruker WeakSet for å unngå å klikke på samme knapp flere ganger.
    * Returnerer true hvis en knapp ble klikket.
    */
   autoClickLoadMore() {
-    // Vanlige tekstmønstre (ikke case-sensitive)
-    const textPatterns = /load more|vis mer|last inn|flere|more|next/i;
-
-    // Vanlige CSS-selektorer for last-inn-knapper
+    const textPatterns = /load more|vis mer|last inn|flere|more|next|continue|show/i;
+    
+    // Kombinert liste over vanlige selektorer for "last inn mer"-knapper
     const selectors = [
       'button:not([disabled])',
       'a[role="button"]:not([disabled])',
+      'a[aria-label*="load more"]',
       '[class*="load-more"]',
       '[id*="load-more"]',
       '[class*="show-more"]',
@@ -83,23 +87,31 @@ class AutoScrollBehavior
       '[class*="pagination"] button'
     ];
     
-    // Kombiner selektorene til én streng for querySelectorAll
     const allSelectors = selectors.join(', ');
     
     const candidates = document.querySelectorAll(allSelectors);
     
     for (const el of candidates) {
-      // 1. Sjekk om elementet er synlig og ikke for lite
-      if (el.offsetParent !== null && el.offsetWidth > 10 && el.offsetHeight > 10) {
+      // Sjekk om elementet er klikket før
+      if (this.seenClickElem.has(el)) {
+        continue;
+      }
+      
+      const element = el as HTMLElement;
+
+      // 1. Sjekk synlighet (offsetParent !== null betyr at elementet er i layouten)
+      if (element.offsetParent !== null && element.offsetWidth > 10 && element.offsetHeight > 10) {
         
-        const text = el.textContent ? el.textContent.trim() : '';
-        const ariaLabel = el.getAttribute('aria-label') || '';
+        const text = element.textContent ? element.textContent.trim() : '';
+        const ariaLabel = element.getAttribute('aria-label') || '';
         
         // 2. Sjekk om teksten matcher et "last inn mer"-mønster
         if (textPatterns.test(text) || textPatterns.test(ariaLabel)) {
           console.log(`[AutoScroll] Klikket på "Load More" knapp: ${text.substring(0, 30)}`);
-          el.click();
-          return true; // Knapp klikket
+          element.click();
+          this.seenClickElem.add(element); // Marker som klikket
+          // Vi klikker KUN én knapp per sjekk for å unngå race conditions
+          return true; 
         }
       }
     }
@@ -121,11 +133,11 @@ class AutoScrollBehavior
     // --------------------------
     const cfg = {
       waitMs: 750,           // Ventetid mellom scroll-steg
-      scrollStep: 300,       // Scroll 150px ned per puls
+      scrollStep: 150,       // Scroll 150px ned per puls
       stableLimit: 25,       // Antall runder uten vekst før stopp
-      bottomHoldExtra: 2000, // Ekstra ventetid når bunnen er nådd
+      bottomHoldExtra: 2000, // Ekstra ventetid når bunnen er nådd (gir tid til å laste inn)
       growthEps: 1,          // Minimum vekst i piksler for å nullstille teller
-      clickDelayMs: 500      // Ny: Ventetid etter et klikk før fortsettelse
+      clickDelayMs: 500      // Ventetid etter et klikk før fortsettelse
     };
     // --------------------------
 
