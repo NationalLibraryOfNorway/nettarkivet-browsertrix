@@ -34,7 +34,6 @@ class ScrollAndClickBehavior
       
       document.querySelectorAll(selectors.join(', ')).forEach(el => {
         el.remove();
-        // console.log(`[Bx] Fjernet overlay: ${el.tagName}`); // Fjernet logging for renere konsoll
       });
 
       // 2. Fjerner potensielle blokkerende bakgrunner (dimmers)
@@ -152,7 +151,7 @@ class ScrollAndClickBehavior
       );
       
     // --------------------------
-    // ✅ KORRIGERT INITIALISERING AV TILSTAND (Fikser lastHeight is not defined)
+    // ✅ INITIALISERING AV TILSTAND (Fikset ReferenceError)
     let totalClicks = 0;
     let stableRounds = 0; // Høyde-stabilitet
     let consecutiveSmallChanges = 0; // DOM-element-stabilitet
@@ -220,9 +219,9 @@ class ScrollAndClickBehavior
         await ctx.Lib.sleep(cfg.bottomHoldExtra); 
       }
 
-      // 🛑 Tidlig stopp basert på DOM-telling
-      if (consecutiveSmallChanges >= 3) {
-        ctx.log({ msg: "Ending due to consecutive small DOM changes (DOM count)", consecutiveSmallChanges });
+      // 🛑 TIDLIG STOPP BASERT PÅ DOM-TELLING (Økt fra 3 til 5)
+      if (consecutiveSmallChanges >= 5) { 
+        ctx.log({ msg: "Ending due to consecutive small DOM changes (DOM count)", consecutiveSmallChanges: consecutiveSmallChanges });
         break;
       }
     }
