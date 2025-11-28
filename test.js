@@ -1,60 +1,42 @@
 class ScrollAndClickBehavior
 {
-  static id = "ScrollAndClick: Infinite Scroll & Link Expansion";
-  static maxScrolls = 500; 
+  static id = "ScrollAndClick: Infinite Scroll & Link Expansion"; // Oppdatert ID
   
   // Brukes for å spore elementer som allerede er klikket
   seenElements = new WeakSet(); 
 
-  // --- Nødvendige Statiske Metoder ---
+  // Nødvendige statiske metoder for Browsertrix
   static isMatch() {
     try { return /^https?:/.test(window.location.href); }
     catch { return false; }
   }
   static init() {
-    return new ScrollAndClickBehavior();
+    return new ScrollAndClickBehavior(); // Returnerer ny klasse
   }
   static runInIframes = false;
-  // ------------------------------------
+  
+  // --- Metoder fra originalen (uendret) ---
 
-  // Metode for å fjerne overlays og cookiebokser
-  removeOverlays() {
+  async awaitPageLoad() {
+    this.removeConsentOverlay();
+    this.fixScroll();
+    
+    // Bruker standard JS sleep her, da ctx.Lib er kun tilgjengelig i run()
+    await new Promise(r => setTimeout(r, 500));
+  }
+  
+  removeConsentOverlay() {
     try {
-      // 1. Fjerner vanlige cookie-bokser og samtykke-iframes
-      const selectors = [
-        '[id*="sp_message"]', 
-        '[class*="sp_message"]', 
-        '[id*="cookie"]', 
-        '[class*="cookie"]', 
-        '[id*="consent"]', 
-        '[class*="consent"]',
-        'iframe[src*="sp.api.no"]',
-        'iframe[src*="sourcepoint"]'
-      ];
+      const consentIframes = document.querySelectorAll('iframe[src*="sp.api.no"], iframe[src*="sourcepoint"], iframe[src*="consent"]');
+      consentIframes.forEach(iframe => iframe.remove());
       
-      document.querySelectorAll(selectors.join(', ')).forEach(el => {
-        el.remove();
-      });
-
-      // 2. Fjerner potensielle blokkerende bakgrunner (dimmers)
-      const possibleBackdrops = document.querySelectorAll('div[style*="position: fixed"][style*="z-index: 2147483647"]');
-      possibleBackdrops.forEach(el => {
-          if (el.innerText.length < 50) {
-              el.remove();
-          }
-      });
-      
-      // 3. Fikser scrolling som ofte blir blokkert av overlays
-      document.body.style.overflow = 'auto';
-      document.body.style.position = 'static';
-      document.documentElement.style.overflow = 'auto';
-
+      const overlays = document.querySelectorAll('[id*="sp_message"], [class*="sp_message"], div[style*="z-index: 2147483647"]');
+      overlays.forEach(el => el.remove());
     } catch (e) {
-      console.error('[Bx] Feil under fjerning av overlays:', e);
+      console.debug('Overlay removal error:', e);
     }
   }
-
-  // Din originale fixScroll, beholdt for ekstra robusthet
+  
   fixScroll() {
     try {
       document.body.removeAttribute('style');
@@ -83,14 +65,9 @@ class ScrollAndClickBehavior
       console.debug('Scroll fix error:', e);
     }
   }
-
-  async awaitPageLoad() {
-    this.removeOverlays(); 
-    this.fixScroll();
-    await new Promise(r => setTimeout(r, 500)); 
-  }
   
-  // Hjelpefunksjon for å klikke på alle synlige <a> uten navigasjon
+  // --- NY KLIKK-FUNKSJONALITET ---
+
   clickAllA(ctx) {
     let clicks = 0;
     const allCandidates = document.querySelectorAll('a');
@@ -121,7 +98,11 @@ class ScrollAndClickBehavior
     return clicks;
   }
 
+  // --- Oppdatert run(ctx) ---
+
   async* run(ctx) {
+    // ⚠️ Fjernet din manuelle 'sleep' definisjon, bruker ctx.Lib.sleep i stedet for robusthet.
+    
     // makeState er nøytral for å tillate full kontroll over 'status: loading'
     const makeState = (state, data) => {
       const payload = { state, data };
@@ -139,98 +120,69 @@ class ScrollAndClickBehavior
       stableLimit: 60,       
       bottomHoldExtra: 5000, 
       growthEps: 1,          
-      clickDelayMs: 500      
+      clickDelayMs: 500      
     };
     // --------------------------
-    const DomElementsMinimumChange = 10;
-    
+
     const docHeight = () =>
       Math.max(
         document.documentElement?.scrollHeight || 0,
         document.body?.scrollHeight || 0
       );
       
-    // --------------------------
-    // ✅ INITIALISERING AV TILSTAND (Fikset ReferenceError)
+    // --- INITIALISERING ---
     let totalClicks = 0;
-    let stableRounds = 0; // Høyde-stabilitet
-    let consecutiveSmallChanges = 0; // DOM-element-stabilitet
+    let lastHeight = docHeight();
+    let stableRounds = 0;
     let pulses = 0;
-    
-    let lastHeight = docHeight(); // Første initialisering
-    let lastCount = document.body.getElementsByTagName("*").length; // Første initialisering
-    // --------------------------
-
-    // 🛑 FØRSTE KOMMANDO: SENDER STATUSEN UMIDDELBART
+    // ----------------------
+      
+    // 🛑 FØRSTE KOMMANDO TIL BROWSERTRIX
     yield makeState("autoscroll: started", { status: "loading", msg: "Locking Autoclick" }); 
     
-    // Kjører fjerning igjen
-    this.removeOverlays(); 
-    
     while (stableRounds < cfg.stableLimit) {
-      
-      // Fortsett å sende busy/loading signal
+      // Fortsett å sende busy/loading signal gjennom hele loopen
       yield makeState("autoscroll: progress", { pulses, stableRounds, status: "loading" }); 
 
       // --- SCROLLING ---
       window.scrollBy(0, cfg.scrollStep);
+      // Bruker ctx.Lib.sleep for å opprettholde låsen
       await ctx.Lib.sleep(cfg.waitMs); 
-
-      // --- KLIKKING ---
+      
+      // --- KLIKKING (NYTT) ---
       const clicksThisRound = this.clickAllA(ctx);
       totalClicks += clicksThisRound;
-      
+
       if (clicksThisRound > 0) {
         ctx.log({ msg: `Clicked ${clicksThisRound} new <a> elements`, totalClicks });
-        await ctx.Lib.sleep(cfg.clickDelayMs); 
+        await ctx.Lib.sleep(cfg.clickDelayMs); // Vent etter klikk
       }
+
+      // ------------------------
+
+      yield makeState("autoscroll: pulse", { pulses, status: "loading" }); 
+      pulses++;
+
+      const atBottom = (window.innerHeight + window.scrollY) >= (docHeight() - 2);
       
-      // --- STABILITETSSJEKK ---
-      const newCount = document.body.getElementsByTagName("*").length;
-      const delta = newCount - lastCount;
-      
-      if (delta >= DomElementsMinimumChange) {
-        consecutiveSmallChanges = 0;
-      } else {
-        consecutiveSmallChanges += 1;
+      if (atBottom) {
+        await ctx.Lib.sleep(cfg.bottomHoldExtra); // Bruker ctx.Lib.sleep
       }
-      
+
       const h = docHeight();
       const grew = (h - lastHeight) > cfg.growthEps;
       
       if (grew) stableRounds = 0;
       else      stableRounds++;
       
-      // Oppdaterer for NESTE iterasjon
-      lastCount = newCount;
       lastHeight = h;
-      pulses++;
-
-      // Oppretthold lås
-      yield makeState("autoscroll: pulse", { 
-          pulses, 
-          stableRounds: stableRounds, 
-          DOMStableRounds: consecutiveSmallChanges,
-          status: "loading" 
-      }); 
-      
-      const atBottom = (window.innerHeight + window.scrollY) >= (docHeight() - 2);
-      if (atBottom) {
-        await ctx.Lib.sleep(cfg.bottomHoldExtra); 
-      }
-
-      // 🛑 TIDLIG STOPP BASERT PÅ DOM-TELLING (Økt fra 3 til 5)
-      if (consecutiveSmallChanges >= 50) { 
-        ctx.log({ msg: "Ending due to consecutive small DOM changes (DOM count)", consecutiveSmallChanges: consecutiveSmallChanges });
-        break;
-      }
     }
 
-    // 🔓 Siste yield: Sender ferdig-signal UTEN status: loading
+    // Sender ferdig-signal UTEN status: loading
     yield makeState("autoscroll: finished", { 
         pulses, 
         stableRounds, 
-        totalClicks,
+        totalClicks, 
         msg: "Releasing Autoclick Lock" 
     });
   }
