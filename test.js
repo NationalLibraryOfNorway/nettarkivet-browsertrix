@@ -220,7 +220,7 @@ class ScrollAndClickBehavior
       }
 
       // 🛑 TIDLIG STOPP BASERT PÅ DOM-TELLING (Økt fra 3 til 5)
-      if (consecutiveSmallChanges >= 5) { 
+      if (consecutiveSmallChanges >= 50) { 
         ctx.log({ msg: "Ending due to consecutive small DOM changes (DOM count)", consecutiveSmallChanges: consecutiveSmallChanges });
         break;
       }
