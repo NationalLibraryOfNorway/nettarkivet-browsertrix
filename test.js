@@ -1,8 +1,17 @@
 class AutoScrollBehavior
 {
   static id = "AutoScroll: infinite scroll (Fast & Smooth, Bx Safe)";
-  // ... (unchanged methods: isMatch, init, runInIframes) ...
   
+  // Statiske metoder nødvendig for Browsertrix/Generelle Behavior-rammeverk:
+  static isMatch() { 
+    try { return /^https?:/.test(window.location.href); }
+    catch { return false; }
+  }
+  static init() { 
+    return new AutoScrollBehavior();
+  }
+  static runInIframes = false;
+
   async awaitPageLoad() {
     this.removeConsentOverlay();
     this.fixScroll();
@@ -61,13 +70,13 @@ class AutoScrollBehavior
     };
 
     // --------------------------
-    // 📌 KONFIGURASJON
+    // 📌 KONFIGURASJON: VELDIG RASK & JEVN SCROLL
     // --------------------------
     const cfg = {
       waitMs: 500,            // Redusert ventetid = Jevn og rask bevegelse
       scrollStep: 600,       // Stort steg = Rask fremdrift
-      stableLimit: 60,       
-      bottomHoldExtra: 5000, 
+      stableLimit: 60,       // Antall pulser uten vekst før stopp
+      bottomHoldExtra: 5000, // Lang ventetid ved bunn
       growthEps: 1,          
       clickDelayMs: 500      
     };
@@ -84,7 +93,7 @@ class AutoScrollBehavior
     let pulses = 0;
     
     while (stableRounds < cfg.stableLimit) {
-      // VIKTIG: Sender busy-signal til Browsertrix
+      // VIKTIG: Sender busy-signal for å hindre Browsertrix i å klikke
       yield makeState("autoscroll: busy", { pulses, status: "scrolling" }); 
 
       window.scrollBy(0, cfg.scrollStep);
