@@ -204,8 +204,8 @@ class AutoScrollBehavior
     // 📌 KONFIGURASJON
     // --------------------------
     const cfg = {
-      waitMs: 750,           
-      scrollStep: 150,       
+      waitMs: 400,           
+      scrollStep: 450,       
       stableLimit: 25,       
       bottomHoldExtra: 2000, 
       growthEps: 1,          
