@@ -64,10 +64,11 @@ class AutoScrollBehavior
   /**
    * Finner den neste usynlige, same-origin lenken ('a' tagg).
    */
-  nextSameOriginLink(selector = "a"): HTMLElement | null {
+  nextSameOriginLink(selector = "a") { // Endret returtype til å være mindre streng
     try {
       const allLinks = document.querySelectorAll(selector);
       for (const el of allLinks) {
+        // Bruk element direkte uten unødvendig konvertering for å unngå syntax
         const element = el; 
 
         // Sjekk for same-origin (kun interne lenker)
@@ -105,7 +106,7 @@ class AutoScrollBehavior
   /**
    * Utfører klikk og håndterer eventuell navigasjon (går tilbake).
    */
-  async processElem(elem: HTMLElement, sleep: (ms: number) => Promise<void>) {
+  async processElem(elem, sleep) { // Fjernet typesjekk i argumenter
     // Legg til i settet FØR klikk (Browsertrix-stil)
     this.seenElem.add(elem);
 
@@ -203,8 +204,8 @@ class AutoScrollBehavior
     // 📌 KONFIGURASJON
     // --------------------------
     const cfg = {
-      waitMs: 400,           
-      scrollStep: 400,       
+      waitMs: 750,           
+      scrollStep: 150,       
       stableLimit: 25,       
       bottomHoldExtra: 2000, 
       growthEps: 1,          
@@ -242,7 +243,7 @@ class AutoScrollBehavior
         
         // 2. Utforsk: Klikk et par same-origin lenker
         let linksExplored = 0;
-        let elem: HTMLElement | null;
+        let elem = null;
         
         // Utforsk maks 5 lenker per puls ved bunnen
         const maxLinksToExplore = 5; 
