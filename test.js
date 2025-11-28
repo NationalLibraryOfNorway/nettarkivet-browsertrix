@@ -24,37 +24,32 @@ class ScrollAndClick {
 // NY FUNKSJON: Autoclick for å eksponere og kø-sette innhold
 // ----------------------------------------------------
 
-  async performAutoclick(ctx) {
+async performAutoclick(ctx) {
     const selector = "a";
     const currentOrigin = self.location.origin;
     let clickedCount = 0;
     
-    // Vi bruker en enkel Set for å hindre gjentatte klikk på samme URL i denne fasen
     const autoclickedUrls = new Set();
-    
-    // Henter alle klikkbare elementer (anker-tagger)
     const allLinks = document.querySelectorAll(selector);
 
     for (const el of allLinks) {
-        // KORREKSJON: Bruker JSDoc typehinting i stedet for 'as' (Løser SyntaxError)
         const elem = /** @type {HTMLAnchorElement} */ (el);
 
-        // 1. Filtrer: Kun Same Origin
         if (!elem.href || !elem.href.startsWith(currentOrigin)) {
             continue;
         }
 
-        // 2. Filtrer: Sørg for at den er klikkbar og ikke usett
         if (!elem.checkVisibility() || elem.target === '_blank' || autoclickedUrls.has(elem.href)) {
             continue;
         }
 
         ctx.log({ msg: "Autoclick: Sending link to queue and attempting click", url: elem.href, level: "debug" });
 
-        // Sender til køen (ctx.Lib.addLink emulerer addToExternalSet for global deduplisering)
-        await ctx.Lib.addLink(elem.href); 
+        // 🔥 KORREKSJON: Fjerner 'await' her for å unngå at konteksten ødelegges mens vi venter.
+        // Dette sender kommandoen til Browsertrix, men vi venter ikke på bekreftelsen.
+        ctx.Lib.addLink(elem.href); 
         
-        // Klikker for å tvinge frem dynamisk innholdslasting på den nåværende siden
+        // Klikk for å tvinge frem dynamisk innhold
         elem.click();
         autoclickedUrls.add(elem.href);
         clickedCount++;
