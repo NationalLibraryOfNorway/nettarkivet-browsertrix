@@ -87,7 +87,7 @@ class ScrollAndClickBehavior
     }
   }
   
-  // --- KLIKK-FUNKSJONALITET MED SUB-PATH REGLER ---
+  // --- KLIKK-FUNKSJONALITET MED SUB-PATH REGLER (Uendret) ---
 
   clickAllA(ctx) {
     let clicks = 0;
@@ -146,7 +146,7 @@ class ScrollAndClickBehavior
     return clicks;
   }
 
-  // --- Hovedutførelsesmetode (NY LOGIKK) ---
+  // --- Hovedutførelsesmetode (Med FIX for stabilitet ved bunn) ---
 
   async* run(ctx) {
     const makeState = (state, data) => {
@@ -166,7 +166,7 @@ class ScrollAndClickBehavior
       bottomHoldExtra: 5000, 
       growthEps: 1,          
       clickDelayMs: 500,
-      clickMaxRounds: 50 // Ny konfigurasjon: Maks runder med klikk-forsøk (for å hindre uendelig loop)
+      clickMaxRounds: 50 
     };
     // --------------------------
 
@@ -199,8 +199,6 @@ class ScrollAndClickBehavior
       window.scrollBy(0, cfg.scrollStep);
       await ctx.Lib.sleep(cfg.waitMs); 
       
-      // Ingen klikk i denne fasen.
-      
       yield makeState("autoscroll: pulse", { pulses, status: "loading" }); 
       pulses++;
 
@@ -217,6 +215,13 @@ class ScrollAndClickBehavior
       else      stableRounds++;
       
       lastHeight = h;
+      
+      // 💡 FIX: Bryt loop umiddelbart hvis vi er ved bunnen og siden ikke vokser.
+      // Dette forhindrer å vente på 60 runder når vi er ferdige.
+      if (atBottom && !grew) {
+          ctx.log({ msg: "FASE 1: Stabil ved bunn av side. Bryter loop tidlig.", level: "warning" });
+          break;
+      }
     }
 
     ctx.log({ msg: `FASE 1 Fullført: Siden er stabil etter ${stableRounds} runder.` });
@@ -238,7 +243,6 @@ class ScrollAndClickBehavior
 
         if (clicksThisRound > 0) {
             ctx.log({ msg: `Runde ${clickRounds}: Klikket ${clicksThisRound} nye elementer.` });
-            // Vent litt for å la DOM oppdatere seg etter klikk
             await ctx.Lib.sleep(cfg.clickDelayMs); 
         } else {
             ctx.log({ msg: `Runde ${clickRounds}: Ingen nye elementer å klikke. Avslutter Klikk-fase.` });
