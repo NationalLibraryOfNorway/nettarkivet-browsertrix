@@ -1,6 +1,6 @@
 class ScrollAndClickBehavior
 {
-  static id = "ScrollAndClick: Infinite Scroll & Link Expansion"; // Oppdatert ID
+  static id = "ScrollAndClick: Infinite Scroll & Link Expansion (Sub-path Restricted)";
   
   // Brukes for å spore elementer som allerede er klikket
   seenElements = new WeakSet(); 
@@ -11,29 +11,49 @@ class ScrollAndClickBehavior
     catch { return false; }
   }
   static init() {
-    return new ScrollAndClickBehavior(); // Returnerer ny klasse
+    return new ScrollAndClickBehavior();
   }
   static runInIframes = false;
   
-  // --- Metoder for Overlays og Scroll-fiksing (uendret) ---
+  // --- Metoder for Overlays og Scroll-fiksing ---
 
   async awaitPageLoad() {
     this.removeConsentOverlay();
     this.fixScroll();
     
-    // Bruker standard JS sleep her, da ctx.Lib er kun tilgjengelig i run()
     await new Promise(r => setTimeout(r, 500));
   }
   
   removeConsentOverlay() {
     try {
-      const consentIframes = document.querySelectorAll('iframe[src*="sp.api.no"], iframe[src*="sourcepoint"], iframe[src*="consent"]');
-      consentIframes.forEach(iframe => iframe.remove());
+      const selectors = [
+        '[id*="sp_message"]', 
+        '[class*="sp_message"]', 
+        '[id*="cookie"]', 
+        '[class*="cookie"]', 
+        '[id*="consent"]', 
+        '[class*="consent"]',
+        'iframe[src*="sp.api.no"]',
+        'iframe[src*="sourcepoint"]'
+      ];
       
-      const overlays = document.querySelectorAll('[id*="sp_message"], [class*="sp_message"], div[style*="z-index: 2147483647"]');
-      overlays.forEach(el => el.remove());
+      document.querySelectorAll(selectors.join(', ')).forEach(el => {
+        el.remove();
+      });
+
+      const possibleBackdrops = document.querySelectorAll('div[style*="position: fixed"][style*="z-index: 2147483647"]');
+      possibleBackdrops.forEach(el => {
+          if (el.innerText.length < 50) {
+              el.remove();
+          }
+      });
+      
+      document.body.style.overflow = 'auto';
+      document.body.style.position = 'static';
+      document.documentElement.style.overflow = 'auto';
+
     } catch (e) {
-      console.debug('Overlay removal error:', e);
+      console.error('[Bx] Feil under fjerning av overlays:', e);
     }
   }
   
@@ -66,54 +86,72 @@ class ScrollAndClickBehavior
     }
   }
   
-  // --- KLIKK-FUNKSJONALITET MED LOGGING ---
+  // --- KLIKK-FUNKSJONALITET MED SUB-PATH REGLER ---
 
   clickAllA(ctx) {
     let clicks = 0;
-    const allCandidates = document.querySelectorAll('a');
+    const allCandidates = document.links; 
+    const currentPath = window.location.pathname; // Henter nåværende sti
 
     for (const elem of allCandidates) {
         if (this.seenElements.has(elem)) continue;
 
         const href = elem.getAttribute('href');
         
-        // Logg lenken som behandles
         ctx.log({ msg: "Behandler lenke", href: href || "[Ingen href]", level: "info" });
         
-        // 🛑 Sikkerhetssjekk: Klikk KUN på lenker som IKKE navigerer vekk fra siden.
-        if (href && !href.startsWith('#') && !href.startsWith('javascript:')) {
-            // Logg at den ikke skal klikkes på
-            ctx.log({ msg: "Lenke ignorert: Ekstern/navigerende URL", href: href, level: "debug" });
-            continue; 
+        // --- NY SIKKERHETSSJEKK: KLIKK KUN PÅ: ---
+        let shouldClick = false;
+
+        if (href === null || href === "") {
+            ctx.log({ msg: "Lenke ignorert: Mangler href", level: "debug" });
+            continue;
+        } else if (href.startsWith('#') || href.startsWith('javascript:')) {
+            // Anker eller JS-kall (klikk)
+            shouldClick = true;
+        } else if (href.startsWith('/')) {
+            // Relativ lenke: Sjekk om den starter med nåværende URL-sti
+            if (href.startsWith(currentPath)) {
+                shouldClick = true; // Lenken er /sti/til/side når vi er på /sti/til
+            } else {
+                ctx.log({ msg: "Lenke ignorert: Relativ, men utenfor nåværende sti", href: href, level: "debug" });
+            }
+        } else {
+            // Absolutt lenke (http/https/mailto osv.) -> IGNORER
+            ctx.log({ msg: "Lenke ignorert: Absolutt/Ekstern URL", href: href, level: "debug" });
         }
-        
+
+        if (!shouldClick) {
+            continue;
+        }
+        // ------------------------------------------
+
         // Sjekk om elementet er i viewport (før klikkforsøk)
         const rect = elem.getBoundingClientRect();
         const isInViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
         
         if (!isInViewport) {
-            // Lenken er ikke synlig/i viewport, ignorerer
-            ctx.log({ msg: "Lenke ignorert: Ikke i viewport", href: href || "[Ingen href]", level: "debug" });
+            ctx.log({ msg: "Lenke ignorert: Ikke i viewport", href: href, level: "debug" });
             continue;
         }
 
         try {
-            // Logg at den skal klikkes på og klikk
-            ctx.log({ msg: "Lenke klikket: OK", href: href || "[Ingen href]", level: "info" });
+            // Logger at den skal klikkes på og klikk
+            ctx.log({ msg: "Lenke klikket: OK (Innenfor sti)", href: href, level: "warning" });
+            
             elem.click();
             this.seenElements.add(elem);
             clicks++;
         } catch (e) {
-             ctx.log({ msg: "Failed to click <a> tag", href: href || "[Ingen href]", level: "warning", error: e.message });
+             ctx.log({ msg: "Failed to click <a> tag", href: href, level: "warning", error: e.message });
         }
     }
     return clicks;
   }
 
-  // --- Oppdatert run(ctx) (uendret fra forrige versjon) ---
+  // --- Hovedutførelsesmetode (uendret) ---
 
   async* run(ctx) {
-    // makeState er nøytral for å tillate full kontroll over 'status: loading'
     const makeState = (state, data) => {
       const payload = { state, data };
       if (ctx?.Lib?.getState) return ctx.Lib.getState(payload);
@@ -151,24 +189,19 @@ class ScrollAndClickBehavior
     yield makeState("autoscroll: started", { status: "loading", msg: "Locking Autoclick" }); 
     
     while (stableRounds < cfg.stableLimit) {
-      // Fortsett å sende busy/loading signal gjennom hele loopen
       yield makeState("autoscroll: progress", { pulses, stableRounds, status: "loading" }); 
 
       // --- SCROLLING ---
       window.scrollBy(0, cfg.scrollStep);
-      // Bruker ctx.Lib.sleep for å opprettholde låsen
       await ctx.Lib.sleep(cfg.waitMs); 
       
-      // --- KLIKKING (NYTT) ---
+      // --- KLIKKING ---
       const clicksThisRound = this.clickAllA(ctx);
       totalClicks += clicksThisRound;
 
       if (clicksThisRound > 0) {
-        ctx.log({ msg: `Clicked ${clicksThisRound} new <a> elements`, totalClicks });
-        await ctx.Lib.sleep(cfg.clickDelayMs); // Vent etter klikk
+        await ctx.Lib.sleep(cfg.clickDelayMs); 
       }
-
-      // ------------------------
 
       yield makeState("autoscroll: pulse", { pulses, status: "loading" }); 
       pulses++;
@@ -176,7 +209,7 @@ class ScrollAndClickBehavior
       const atBottom = (window.innerHeight + window.scrollY) >= (docHeight() - 2);
       
       if (atBottom) {
-        await ctx.Lib.sleep(cfg.bottomHoldExtra); // Bruker ctx.Lib.sleep
+        await ctx.Lib.sleep(cfg.bottomHoldExtra); 
       }
 
       const h = docHeight();
@@ -188,7 +221,7 @@ class ScrollAndClickBehavior
       lastHeight = h;
     }
 
-    // Sender ferdig-signal UTEN status: loading
+    // 🔓 Siste yield: Sender ferdig-signal UTEN status: loading
     yield makeState("autoscroll: finished", { 
         pulses, 
         stableRounds, 
