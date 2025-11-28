@@ -12,7 +12,7 @@ class AutoScrollBehavior
   
   async awaitPageLoad() {
     this.removeConsentOverlay();
-    //this.fixScroll();
+    this.fixScroll();
     
     await new Promise(r => setTimeout(r, 500));
   }
