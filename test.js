@@ -1,8 +1,12 @@
 class ScrollAndClickBehavior
 {
-  static id = "ScrollAndClick: Infinite Scroll & Link Expansion (Async Fix)";
+  static id = "ScrollAndClick: Complete Browsertrix Logic";
   
   seenElements = new WeakSet(); 
+  
+  // Variabler for Navigasjonskontroll (Likt AutoClick)
+  _beforeUnloadHandler = null; 
+  origPath = document.location.pathname;
 
   static isMatch() {
     try { return /^https?:/.test(window.location.href); }
@@ -13,8 +17,8 @@ class ScrollAndClickBehavior
   }
   static runInIframes = false;
   
-  // --- Metoder for Overlays og Scroll-fiksing (Uendret) ---
-
+  // --- Opprydding og Scroll Fix ---
+  
   async awaitPageLoad() {
     this.removeConsentOverlay();
     this.fixScroll();
@@ -56,65 +60,94 @@ class ScrollAndClickBehavior
       console.debug('Scroll fix error:', e);
     }
   }
+
+  // --- NAVIGATION CONTROL (Fra AutoClick) ---
+
+  addBeforeUnloadListener() {
+    this._beforeUnloadHandler = (event) => {
+      event.preventDefault(); 
+      return false;
+    };
+    window.addEventListener("beforeunload", this._beforeUnloadHandler);
+  }
+
+  removeBeforeUnloadListener() {
+    if (this._beforeUnloadHandler) {
+      window.removeEventListener("beforeunload", this._beforeUnloadHandler);
+      this._beforeUnloadHandler = null;
+    }
+  }
+
+  // --- KLIKK-FUNKSJONALITET (FOKUS PÅ INNHOLDSUTVIDELSE) ---
   
-  // --- KLIKK-FUNKSJONALITET (ASYNC FIX) ---
-  // Bruker async for å tillate 'await' for stabil klikk-forsinkelse
   async clickAllA(ctx) {
     let clicks = 0;
-    const allCandidates = document.querySelectorAll('a[href], a:not([href]), img[onclick], img[data-lightbox], img[data-src], img.clickable'); 
+    const allCandidates = document.querySelectorAll('a[href], a:not([href]), img[onclick], [role="button"], button, a img'); 
 
     for (const elem of allCandidates) {
         if (this.seenElements.has(elem)) continue;
 
+        let targetElem = elem;
         let href = elem.getAttribute('href');
-        if (elem.tagName === 'IMG') {
-            href = elem.getAttribute('data-src') || elem.getAttribute('src'); 
+        
+        if (elem.tagName === 'IMG' && elem.closest('a')) {
+            targetElem = elem.closest('a');
+            href = targetElem.getAttribute('href');
         }
-        
-        ctx.log({ msg: "Behandler kandidat", tagName: elem.tagName, href: href || "[Ingen href]", level: "info" });
-        
-        let shouldClick = false;
 
-        if (href === null || href === "") {
-            if (elem.tagName === 'IMG' && (!elem.getAttribute('onclick') && !elem.closest('a'))) {
-                ctx.log({ msg: "Element ignorert: IMG uten href/onclick/lenke-forelder", level: "debug" });
-                continue;
-            }
+        let shouldClick = false;
+        let isNavigatingLink = false;
+
+        if (href === null || href === "" || targetElem.tagName === 'BUTTON' || targetElem.getAttribute('role') === 'button') {
             shouldClick = true; 
         } else if (href.startsWith('#') || href.startsWith('javascript:')) {
             shouldClick = true; 
         } else if (/\.(jpeg|jpg|gif|png|webp|svg)$/i.test(href.split('?')[0])) {
-            shouldClick = true;
+            shouldClick = true; 
+        } else if (href && href.startsWith(self.location.origin) && href !== this.origPath) {
+             shouldClick = true;
+             isNavigatingLink = true;
         } else {
-            ctx.log({ msg: "Element ignorert: Navigerende URL (Absolutt/Relativ)", href: href, level: "debug" });
             continue;
         }
 
         if (!shouldClick) continue;
 
         try {
-            const rect = elem.getBoundingClientRect();
+            const rect = targetElem.getBoundingClientRect();
             const isInViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
             if (!isInViewport) continue;
             
-            this.seenElements.add(elem); 
+            this.seenElements.add(targetElem); 
 
-            ctx.log({ msg: "Element klikket: Potensiell lightbox/innholdsutvider", tagName: elem.tagName, href: href || "[Ingen href]", level: "warning" });
+            if (isNavigatingLink) {
+                ctx.log({ msg: `Navigerende Lenke Klikket (Simulert AutoClick): ${href}.`, level: "warning" });
+            } else {
+                ctx.log({ msg: "Element klikket: Bursdagshilsen Utvidelse", tagName: targetElem.tagName, href: href || "[Ingen href]", level: "warning" });
+            }
             
-            elem.click();
+            const origHref = self.location.href;
+            const origHistoryLen = self.history.length;
+            
+            targetElem.click();
             clicks++;
-            
-            // 💡 Bruker 'await' for å pause mellom klikk for stabilitet
+
             await ctx.Lib.sleep(ctx.cfg.clickDelayMs); 
             
+            if (isNavigatingLink) {
+                if (self.history.length === origHistoryLen + 1 && self.location.href != origHref) {
+                     ctx.log({ msg: "Navigasjon oppdaget (SPA/pushState). Simulerer history.back().", level: "info" });
+                }
+            }
+
         } catch (e) {
-             ctx.log({ msg: "Failed to click element", tagName: elem.tagName, href: href || "[Ingen href]", level: "warning", error: e.message });
+             ctx.log({ msg: "Failed to click element", tagName: targetElem.tagName, href: href || "[Ingen href]", level: "warning", error: e.message });
         }
     }
     return clicks;
   }
 
-  // --- Hovedutførelsesmetode ---
+  // --- HOVEDUTFØRELSE (MED ROBUST SCROLLING OG NAVIGATION LYTTER) ---
 
   async* run(ctx) {
     const makeState = (state, data) => {
@@ -124,9 +157,6 @@ class ScrollAndClickBehavior
       return payload; 
     };
 
-    // --------------------------
-    // 📌 KONFIGURASJON
-    // --------------------------
     const cfg = {
       waitMs: 150,            
       scrollStep: 600,       
@@ -136,9 +166,10 @@ class ScrollAndClickBehavior
       clickDelayMs: 1000, 
       clickMaxRounds: 50
     };
-    // Legg cfg til ctx for tilgang i clickAllA
     ctx.cfg = cfg; 
-    // --------------------------
+    
+    this.addBeforeUnloadListener();
+    this.origPath = document.location.pathname;
 
     const docHeight = () => Math.max( document.documentElement?.scrollHeight || 0, document.body?.scrollHeight || 0 );
       
@@ -156,6 +187,11 @@ class ScrollAndClickBehavior
     ctx.log({ msg: "FASE 1: Starter scrolling til stabil høyde er nådd." });
 
     while (stableRounds < cfg.stableLimit) {
+      if (document.location.pathname !== this.origPath) {
+          ctx.log({ msg: "FASE 1: Lokasjon endret under scroll. Stopper.", level: "warning" });
+          break;
+      }
+
       yield makeState("autoscroll: progress", { pulses, stableRounds, status: "loading" }); 
 
       window.scrollBy(0, cfg.scrollStep);
@@ -171,7 +207,7 @@ class ScrollAndClickBehavior
       }
 
       const h = docHeight();
-      const grew = (h - lastHeight) > cfg.growthEps;
+      const grew = (h - lastHeight) > cfg.growthEps; 
       
       if (grew) stableRounds = 0;
       else      stableRounds++;
@@ -187,16 +223,15 @@ class ScrollAndClickBehavior
     ctx.log({ msg: `FASE 1 Fullført: Siden er stabil etter ${stableRounds} runder.` });
 
     // ######################################################
-    // ## FASE 2: KLIKK PÅ LENKER (ETTER SCROLL)
+    // ## FASE 2: KLIKK PÅ LENKER
     // ######################################################
     
-    ctx.log({ msg: "FASE 2: Starter klikk på lenker som utvider innhold." });
+    ctx.log({ msg: "FASE 2: Starter klikk på utvidende elementer." });
     
     let clicksThisRound = 0;
     let clickRounds = 0;
 
     do {
-        // 💡 Kaller clickAllA med 'await' da den nå er en ASYNC funksjon
         clicksThisRound = await this.clickAllA(ctx); 
 
         totalClicks += clicksThisRound;
@@ -204,8 +239,7 @@ class ScrollAndClickBehavior
 
         if (clicksThisRound > 0) {
             ctx.log({ msg: `Runde ${clickRounds}: Fant og klikket ${clicksThisRound} nye elementer.` });
-            // Yield *etter* en runde med klikk (fanger opp alle endringer)
-            yield makeState("autoclick: yielded", { status: "loading", msg: `Round ${clickRounds} complete` });
+            yield makeState("autoclick: yielded", { status: "loading", msg: `Round ${clickRounds} complete, capturing content.` });
         } else {
             ctx.log({ msg: `Runde ${clickRounds}: Ingen nye elementer å klikke. Avslutter Klikk-fase.` });
         }
@@ -216,6 +250,8 @@ class ScrollAndClickBehavior
     
     // ######################################################
 
+    this.removeBeforeUnloadListener();
+    
     yield makeState("autoscroll: finished", { 
         pulses, 
         stableRounds, 
@@ -226,3 +262,40 @@ class ScrollAndClickBehavior
 }
 
 
+// --- START SKRIPTET (Wrapper for Chrome Console) ---
+(async function() {
+    console.log("--- Bx Scroll and Click Initiert ---");
+    
+    // Simulerer Browsertrix-miljøet (ctx)
+    const ctx = {
+        Lib: {
+            // Asynkrone funksjoner
+            sleep: (ms) => new Promise(r => setTimeout(r, ms)),
+            getState: (payload) => payload
+        },
+        log: (data) => console.log(`[Bx Log] ${data.msg}`, data) 
+    };
+
+    if (!ScrollAndClickBehavior.isMatch()) {
+        console.log("URL matcher ikke ScrollAndClickBehavior. Avslutter.");
+        return;
+    }
+    
+    const behavior = ScrollAndClickBehavior.init();
+    await behavior.awaitPageLoad();
+
+    // Kjører den asynkrone generatorfunksjonen
+    const generator = behavior.run(ctx);
+    let result = await generator.next();
+
+    while (!result.done) {
+        if (result.value instanceof Promise) {
+            await result.value; 
+        }
+        console.log(`[Bx State]`, result.value);
+        result = await generator.next();
+    }
+
+    console.log("--- Bx Scroll and Click Fullført ---");
+    console.log("Endelig Tilstand:", result.value);
+})();
