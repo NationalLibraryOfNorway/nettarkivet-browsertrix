@@ -1,6 +1,6 @@
 class AutoScrollBehavior
 {
-  static id = "AutoScroll: simple infinite scroll";
+  static id = "AutoScroll: simple infinite scroll + autoclick";
   static isMatch() {
     try { return /^https?:/.test(window.location.href); }
     catch { return false; }
@@ -64,6 +64,49 @@ class AutoScrollBehavior
     }
   }
   
+  /**
+   * Finner og klikker på en "Last inn mer"-knapp.
+   * Returnerer true hvis en knapp ble klikket.
+   */
+  autoClickLoadMore() {
+    // Vanlige tekstmønstre (ikke case-sensitive)
+    const textPatterns = /load more|vis mer|last inn|flere|more|next/i;
+
+    // Vanlige CSS-selektorer for last-inn-knapper
+    const selectors = [
+      'button:not([disabled])',
+      'a[role="button"]:not([disabled])',
+      '[class*="load-more"]',
+      '[id*="load-more"]',
+      '[class*="show-more"]',
+      '[class*="next-page"]',
+      '[class*="pagination"] button'
+    ];
+    
+    // Kombiner selektorene til én streng for querySelectorAll
+    const allSelectors = selectors.join(', ');
+    
+    const candidates = document.querySelectorAll(allSelectors);
+    
+    for (const el of candidates) {
+      // 1. Sjekk om elementet er synlig og ikke for lite
+      if (el.offsetParent !== null && el.offsetWidth > 10 && el.offsetHeight > 10) {
+        
+        const text = el.textContent ? el.textContent.trim() : '';
+        const ariaLabel = el.getAttribute('aria-label') || '';
+        
+        // 2. Sjekk om teksten matcher et "last inn mer"-mønster
+        if (textPatterns.test(text) || textPatterns.test(ariaLabel)) {
+          console.log(`[AutoScroll] Klikket på "Load More" knapp: ${text.substring(0, 30)}`);
+          el.click();
+          return true; // Knapp klikket
+        }
+      }
+    }
+    
+    return false; // Ingen knapp klikket
+  }
+
   async* run(ctx) {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const makeState = (state, data) => {
@@ -74,14 +117,15 @@ class AutoScrollBehavior
     };
 
     // --------------------------
-    // 📌 SAKTE, SMOOTH SCROLLING
+    // 📌 KONFIGURASJON FOR STABIL SCROLLING OG KLIKK
     // --------------------------
     const cfg = {
-      waitMs: 500,           // scroll hvert 250 ms
-      scrollStep: 300,       // scroll 150px ned per puls
-      stableLimit: 25,
-      bottomHoldExtra: 1500,
-      growthEps: 1
+      waitMs: 750,           // Ventetid mellom scroll-steg
+      scrollStep: 300,       // Scroll 150px ned per puls
+      stableLimit: 25,       // Antall runder uten vekst før stopp
+      bottomHoldExtra: 2000, // Ekstra ventetid når bunnen er nådd
+      growthEps: 1,          // Minimum vekst i piksler for å nullstille teller
+      clickDelayMs: 500      // Ny: Ventetid etter et klikk før fortsettelse
     };
     // --------------------------
 
@@ -105,18 +149,30 @@ class AutoScrollBehavior
       await sleep(cfg.waitMs);
 
       const atBottom = (window.innerHeight + window.scrollY) >= (docHeight() - 2);
+      
       if (atBottom) {
+        // 1. Prøv å klikke på en "Last inn mer"-knapp
+        const clicked = this.autoClickLoadMore();
+        
+        // 2. Vent ekstra tid uansett (for treig innlasting)
         await sleep(cfg.bottomHoldExtra);
+
+        // 3. Hvis vi klikket, vent litt ekstra for at siden skal reagere
+        if (clicked) {
+             await sleep(cfg.clickDelayMs);
+        }
       }
 
       const h = docHeight();
       const grew = (h - lastHeight) > cfg.growthEps;
+      
+      // Hvis siden vokste ELLER vi akkurat klikket på en knapp, nullstill telleren
       if (grew) stableRounds = 0;
       else      stableRounds++;
+      
       lastHeight = h;
     }
 
-    // Nå stopper den smooth der den ikke lenger finner nytt innhold.
     yield makeState("autoscroll: finished", { pulses, stableRounds });
   }
 }
