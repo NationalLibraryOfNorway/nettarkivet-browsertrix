@@ -1,6 +1,6 @@
 class ScrollAndClick {
   static id = "Scroll and Click";
-  static maxScrolls = 500; // standard maksimalt antall scroll-iterasjoner
+  static maxScrolls = 500; // standard maksimalt antall scroll-iterasjoner (brukes ikke i ny logikk)
   selectors = [
     "a",
     "button",
@@ -35,7 +35,7 @@ class ScrollAndClick {
   static runInIframes = false;
 
 // ----------------------------------------------------
-// DIN ROBUSTE CONSENT-FJERNER
+// CONSENT OG SCROLL FIX METODER (FRA NY LOGIKK)
 // ----------------------------------------------------
 
   removeConsentOverlay(ctx) {
@@ -56,7 +56,7 @@ class ScrollAndClick {
         overlayCount++;
       });
       
-      // Gjenoppretter scrolling på body og html
+      // Gjenoppretter scrolling (Fullt sett)
       document.body.style.overflow = 'auto';
       document.body.style.position = 'static';
       document.documentElement.style.overflow = 'auto';
@@ -73,95 +73,142 @@ class ScrollAndClick {
       ctx.log({ msg: `Consent: Feil under fjerning av overlay: ${e.message}`, level: "error" });
     }
   }
+    
+  fixScroll(ctx) {
+    try {
+      // Fjern inline styles
+      document.body.removeAttribute('style');
+      document.documentElement.removeAttribute('style');
+      
+      // Sett riktige properties
+      document.body.style.setProperty('overflow', 'auto', 'important');
+      document.body.style.setProperty('position', 'static', 'important');
+      document.body.style.setProperty('height', 'auto', 'important');
+      document.body.style.setProperty('width', 'auto', 'important');
+      document.documentElement.style.setProperty('overflow', 'auto', 'important');
+      
+      // Legg til style tag
+      if (!document.getElementById('force-scroll-fix')) {
+        const style = document.createElement('style');
+        style.id = 'force-scroll-fix';
+        style.textContent = `
+          body, html {
+            overflow: auto !important;
+            position: static !important;
+            height: auto !important;
+            width: auto !important;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+      ctx.log({ msg: "Scroll fix påsatt.", level: "debug" });
+    } catch (e) {
+      ctx.log({ msg: `Scroll fix error: ${e.message}`, level: "debug" });
+    }
+  }
+
 
   /**
    * Browsertrix-standard oppstartsmetode.
    */
   async awaitPageLoad(ctx) {
-    // Kjører consent-fjerning før hovedsløyfen
+    // Kjører consent-fjerning og scroll-fikser
     this.removeConsentOverlay(ctx);
+    this.fixScroll(ctx); // Legg til fixScroll her
     // Bruker ctx.Lib.sleep som forventet i Browsertrix
-    await ctx.Lib.sleep(500); 
+    await ctx.Lib.sleep(1000);  // Litt lengre ventetid for å la siden stabilisere seg
   }
 
 // ----------------------------------------------------
-// RUN-metoden (Hovedsløyfen)
+// RUN-metoden (NY SCROLL & KLIKK SLØYFE)
 // ----------------------------------------------------
 
   async* run(ctx) {
+    const docHeight = () =>
+      Math.max(
+        document.documentElement?.scrollHeight || 0,
+        document.body?.scrollHeight || 0
+      );
+    
+    // Konfigurasjon for Scroll/Stabilitet
+    const cfg = {
+      waitMs: 900,
+      stableLimit: 10,       // Antall runder uten vekst før stopp
+      bottomHoldExtra: 1500, // Ekstra ventetid når vi når bunnen
+      growthEps: 8           // Minimum vekst i px for å regnes som vekst
+    };
+    
     let click = 0;
-    const DomElementsMinimumChange = 10;
-    let consecutiveSmallChanges = 0;
+    let lastHeight = docHeight();
+    let stableRounds = 0;
+    let pulses = 0;
 
-    // 🛑 NYTT: Initialiser lastCount HER, etter at awaitPageLoad (med opprydding) har kjørt
-    const initialCount = document.body.getElementsByTagName("*").length;
-    let lastCount = initialCount; 
-    
-    let stableTime = 0;
-    let iterations = 0;
+    ctx.log({ msg: "Starting combined Scroll and Click loop" });
 
-    ctx.log({ msg: "Starting scroll loop", initialDomCount: initialCount });
+    while (stableRounds < cfg.stableLimit && pulses < 100) { // Begrens pulser til 100 for sikkerhet
+        
+        // 1. SCROLL
+        const targetY = docHeight() - (window.innerHeight || 800);
+        window.scrollTo(0, targetY > 0 ? targetY : 0);
+        yield ctx.Lib.getState({ state: "autoscroll: pulse", data: { pulses, stableRounds } });
+        pulses++;
 
-    while (true) {
-      if (++iterations > ScrollAndClick.maxScrolls) {
-        ctx.log({ msg: "Max scrolls reached", iterations });
-        break;
-      }
-
-      // scroll to bottom
-      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-      yield ctx.Lib.sleep(1000); 
-
-      // click if matched
-      const selectstring = this.selectors.join(",");
-      const elems = document.querySelectorAll(selectstring);
-      for (const elem of elems) {
-        const txt = (elem.innerText || elem.textContent || "").toLowerCase().trim();
-        if (this.triggerwords.some(w => w === txt)) {
-          elem.click();
-          // NYTT: Kort pause etter klikk for å la innholdet lastes/DOM endres
-          yield ctx.Lib.sleep(200); 
-          click++;
+        // Vent etter scroll
+        await ctx.Lib.sleep(cfg.waitMs); 
+        
+        // 2. KLIKK LOGIKK
+        const selectstring = this.selectors.join(",");
+        const elems = document.querySelectorAll(selectstring);
+        let clicksThisRound = 0;
+        
+        for (const elem of elems) {
+          const txt = (elem.innerText || elem.textContent || "").toLowerCase().trim();
+          if (this.triggerwords.some(w => w === txt)) {
+            elem.click();
+            await ctx.Lib.sleep(200); // Kort pause etter klikk for å trigge lasting
+            click++;
+            clicksThisRound++;
+          }
         }
-      }
-      if (elems.length > 0) {
-        ctx.log({ msg: "Clicked load more buttons", totalClicks: click, thisRound: elems.length });
-      }
+        if (clicksThisRound > 0) {
+          ctx.log({ msg: "Clicked load more buttons", totalClicks: click, thisRound: clicksThisRound });
+        }
+        
+        // 3. Ekstra venting hvis vi er på bunnen
+        const atBottom = (window.innerHeight + window.scrollY) >= (docHeight() - 2);
+        if (atBottom) {
+          await ctx.Lib.sleep(cfg.bottomHoldExtra);
+        }
+        
+        // 4. SJEKK STABILITET
+        const h = docHeight();
+        const grew = (h - lastHeight) > cfg.growthEps;
+        
+        if (grew) stableRounds = 0;
+        else      stableRounds++;
+        
+        lastHeight = h;
+        
+        await this.extractBrowserLinks(ctx); // Legg til lenker i hver runde
 
-      yield ctx.Lib.sleep(1000);
-      await this.extractBrowserLinks(ctx);
-
-      // detect DOM changes by element count delta
-      const newCount = document.body.getElementsByTagName("*").length;
-      const delta = newCount - lastCount;
-      ctx.log({ msg: "DomElementsAfterScroll", newCount, delta });
-
-      if (delta >= DomElementsMinimumChange) {
-        consecutiveSmallChanges = 0;
-        stableTime = 0;
-      } else {
-        consecutiveSmallChanges += 1;
-        stableTime += 1000;
-      }
-
-      // update baseline for next iteration
-      lastCount = newCount;
-
-      // stop if 3 consecutive small changes
-      if (consecutiveSmallChanges >= 3) {
-        ctx.log({
-          msg: "Ending due to consecutive small DOM changes",
-          consecutiveSmallChanges,
-          threshold: DomElementsMinimumChange
-        });
-        break;
-      }
-
-      // stop if nothing changes for 10s
-      if (stableTime >= 10000) {
-        ctx.log({ msg: "No significant changes for 10 seconds, stopping scroll" });
-        break;
-      }
+        if (pulses >= 100) {
+            ctx.log({ msg: `Max pulses (${pulses}) reached. Stopping scroll.`, level: "warning" });
+            break;
+        }
     }
+    
+    // Ruller til bunnen ved fullføring
+    try {
+      window.scrollTo(0, docHeight() - (window.innerHeight || 800));
+      yield ctx.Lib.getState({ 
+        state: "autoscroll: finished", 
+        data: { 
+            pulses, 
+            stableRounds, 
+            totalClicks: click, 
+            msg: "Scrolling fullført. Siden er stabil."
+        } 
+      });
+    } catch {}
   }
 }
