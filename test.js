@@ -24,8 +24,10 @@ class ScrollAndClickBehavior
     await new Promise(r => setTimeout(r, 500));
   }
   
+  // ✅ GJENOPPRETTET: Den mer robuste versjonen av removeConsentOverlay
   removeConsentOverlay() {
     try {
+      // 1. Fjerner vanlige cookie-bokser, samtykke-iframes og generiske overlays
       const selectors = [
         '[id*="sp_message"]', 
         '[class*="sp_message"]', 
@@ -34,20 +36,25 @@ class ScrollAndClickBehavior
         '[id*="consent"]', 
         '[class*="consent"]',
         'iframe[src*="sp.api.no"]',
-        'iframe[src*="sourcepoint"]'
+        'iframe[src*="sourcepoint"]',
+        'iframe[src*="consent"]' // Lagt til for full dekning
       ];
       
       document.querySelectorAll(selectors.join(', ')).forEach(el => {
         el.remove();
       });
 
-      const possibleBackdrops = document.querySelectorAll('div[style*="position: fixed"][style*="z-index: 2147483647"]');
+      // 2. Fjerner potensielle blokkerende bakgrunner (dimmers)
+      // Dette tar sikte på generiske overlays med høy z-index
+      const possibleBackdrops = document.querySelectorAll('div[style*="position: fixed"][style*="z-index"]');
       possibleBackdrops.forEach(el => {
-          if (el.innerText.length < 50) {
+          // Sikrer at vi ikke fjerner legitimt innhold (sjekker typisk for små eller tomme overlays)
+          if (el.innerText.length < 50 || el.innerText.includes("cookie") || el.innerText.includes("samtykke")) {
               el.remove();
           }
       });
       
+      // 3. Fikser scrolling som ofte blir blokkert av overlays
       document.body.style.overflow = 'auto';
       document.body.style.position = 'static';
       document.documentElement.style.overflow = 'auto';
@@ -57,6 +64,7 @@ class ScrollAndClickBehavior
     }
   }
   
+  // fixScroll metoden er uendret
   fixScroll() {
     try {
       document.body.removeAttribute('style');
@@ -86,12 +94,12 @@ class ScrollAndClickBehavior
     }
   }
   
-  // --- KLIKK-FUNKSJONALITET MED SUB-PATH REGLER ---
+  // --- KLIKK-FUNKSJONALITET MED SUB-PATH REGLER (Uendret) ---
 
   clickAllA(ctx) {
     let clicks = 0;
     const allCandidates = document.links; 
-    const currentPath = window.location.pathname; // Henter nåværende sti
+    const currentPath = window.location.pathname; 
 
     for (const elem of allCandidates) {
         if (this.seenElements.has(elem)) continue;
@@ -100,24 +108,21 @@ class ScrollAndClickBehavior
         
         ctx.log({ msg: "Behandler lenke", href: href || "[Ingen href]", level: "info" });
         
-        // --- NY SIKKERHETSSJEKK: KLIKK KUN PÅ: ---
+        // --- SIKKERHETSSJEKK ---
         let shouldClick = false;
 
         if (href === null || href === "") {
             ctx.log({ msg: "Lenke ignorert: Mangler href", level: "debug" });
             continue;
         } else if (href.startsWith('#') || href.startsWith('javascript:')) {
-            // Anker eller JS-kall (klikk)
             shouldClick = true;
         } else if (href.startsWith('/')) {
-            // Relativ lenke: Sjekk om den starter med nåværende URL-sti
             if (href.startsWith(currentPath)) {
-                shouldClick = true; // Lenken er /sti/til/side når vi er på /sti/til
+                shouldClick = true; 
             } else {
                 ctx.log({ msg: "Lenke ignorert: Relativ, men utenfor nåværende sti", href: href, level: "debug" });
             }
         } else {
-            // Absolutt lenke (http/https/mailto osv.) -> IGNORER
             ctx.log({ msg: "Lenke ignorert: Absolutt/Ekstern URL", href: href, level: "debug" });
         }
 
@@ -126,7 +131,7 @@ class ScrollAndClickBehavior
         }
         // ------------------------------------------
 
-        // Sjekk om elementet er i viewport (før klikkforsøk)
+        // Sjekk om elementet er i viewport
         const rect = elem.getBoundingClientRect();
         const isInViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
         
@@ -136,7 +141,6 @@ class ScrollAndClickBehavior
         }
 
         try {
-            // Logger at den skal klikkes på og klikk
             ctx.log({ msg: "Lenke klikket: OK (Innenfor sti)", href: href, level: "warning" });
             
             elem.click();
@@ -149,7 +153,7 @@ class ScrollAndClickBehavior
     return clicks;
   }
 
-  // --- Hovedutførelsesmetode (uendret) ---
+  // --- Hovedutførelsesmetode (Uendret) ---
 
   async* run(ctx) {
     const makeState = (state, data) => {
