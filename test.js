@@ -15,7 +15,7 @@ class ScrollAndClickBehavior
   }
   static runInIframes = false;
   
-  // --- Metoder fra originalen (uendret) ---
+  // --- Metoder for Overlays og Scroll-fiksing (uendret) ---
 
   async awaitPageLoad() {
     this.removeConsentOverlay();
@@ -66,7 +66,7 @@ class ScrollAndClickBehavior
     }
   }
   
-  // --- NY KLIKK-FUNKSJONALITET ---
+  // --- KLIKK-FUNKSJONALITET MED LOGGING ---
 
   clickAllA(ctx) {
     let clicks = 0;
@@ -77,32 +77,42 @@ class ScrollAndClickBehavior
 
         const href = elem.getAttribute('href');
         
+        // Logg lenken som behandles
+        ctx.log({ msg: "Behandler lenke", href: href || "[Ingen href]", level: "info" });
+        
         // 🛑 Sikkerhetssjekk: Klikk KUN på lenker som IKKE navigerer vekk fra siden.
         if (href && !href.startsWith('#') && !href.startsWith('javascript:')) {
+            // Logg at den ikke skal klikkes på
+            ctx.log({ msg: "Lenke ignorert: Ekstern/navigerende URL", href: href, level: "debug" });
             continue; 
+        }
+        
+        // Sjekk om elementet er i viewport (før klikkforsøk)
+        const rect = elem.getBoundingClientRect();
+        const isInViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
+        
+        if (!isInViewport) {
+            // Lenken er ikke synlig/i viewport, ignorerer
+            ctx.log({ msg: "Lenke ignorert: Ikke i viewport", href: href || "[Ingen href]", level: "debug" });
+            continue;
         }
 
         try {
-            // Sjekk om elementet er i viewport
-            const rect = elem.getBoundingClientRect();
-            if (rect.top >= 0 && rect.bottom <= window.innerHeight) {
-                
-                elem.click();
-                this.seenElements.add(elem);
-                clicks++;
-            }
+            // Logg at den skal klikkes på og klikk
+            ctx.log({ msg: "Lenke klikket: OK", href: href || "[Ingen href]", level: "info" });
+            elem.click();
+            this.seenElements.add(elem);
+            clicks++;
         } catch (e) {
-             ctx.log({ msg: "Failed to click <a> tag", level: "warning", error: e.message });
+             ctx.log({ msg: "Failed to click <a> tag", href: href || "[Ingen href]", level: "warning", error: e.message });
         }
     }
     return clicks;
   }
 
-  // --- Oppdatert run(ctx) ---
+  // --- Oppdatert run(ctx) (uendret fra forrige versjon) ---
 
   async* run(ctx) {
-    // ⚠️ Fjernet din manuelle 'sleep' definisjon, bruker ctx.Lib.sleep i stedet for robusthet.
-    
     // makeState er nøytral for å tillate full kontroll over 'status: loading'
     const makeState = (state, data) => {
       const payload = { state, data };
