@@ -77,11 +77,11 @@ class AutoScrollBehavior
     // 📌 SAKTE, SMOOTH SCROLLING
     // --------------------------
     const cfg = {
-      waitMs: 250,           // scroll hvert 250 ms
+      waitMs: 500,           // scroll hvert 250 ms
       scrollStep: 150,       // scroll 150px ned per puls
-      stableLimit: 10,
+      stableLimit: 25,
       bottomHoldExtra: 1500,
-      growthEps: 8
+      growthEps: 10
     };
     // --------------------------
 
