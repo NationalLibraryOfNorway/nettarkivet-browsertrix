@@ -1,270 +1,208 @@
-class ScrollAndClickBehavior
-{
-  static id = "ScrollAndClick: Complete Browsertrix Logic (Final)";
-  
-  seenElements = new WeakSet(); 
-  
-  // Variabler for Navigasjonskontroll (Likt AutoClick)
-  _beforeUnloadHandler = null; 
-  origPath = document.location.pathname;
+// --- Start Skript (Wrapper for Chrome Console) ---
+(async function() {
+    console.log("--- Bx Scroll and Click Initiert for Chrome ---");
 
-  static isMatch() {
-    try { return /^https?:/.test(window.location.href); }
-    catch { return false; }
-  }
-  static init() {
-    return new ScrollAndClickBehavior();
-  }
-  static runInIframes = false;
-  
-  // --- Opprydding og Scroll Fix ---
-  
-  async awaitPageLoad() {
-    this.removeConsentOverlay(); // ⬅️ BRUKER DIN SPESIFIKKE VERSJON
-    this.fixScroll();
-    await new Promise(r => setTimeout(r, 500));
-  }
-  
-  // 🎯 DIN SPESIFIKKE FUNKSJON FOR FJERNING AV OVERLAYS 🎯
-  removeConsentOverlay() {
-    try {
-      // Fjern SourcePoint/consent iframes
-      const consentIframes = document.querySelectorAll('iframe[src*="sp.api.no"], iframe[src*="sourcepoint"], iframe[src*="consent"]');
-      consentIframes.forEach(iframe => iframe.remove());
-       
-      // Fjern overlays (inkludert høy z-index og sp_message)
-      const overlays = document.querySelectorAll('[id*="sp_message"], [class*="sp_message"], div[style*="z-index: 2147483647"]');
-      overlays.forEach(el => el.remove());
-      
-      // Gjenoppretter scrolling på body og html (fra robust versjon)
-      document.body.style.overflow = 'auto';
-      document.body.style.position = 'static';
-      document.documentElement.style.overflow = 'auto';
-
-    } catch (e) {
-      console.debug('Overlay removal error:', e);
-    }
-  }
-  
-  fixScroll() {
-    // Beholdt den robuste Scroll Fix-logikken
-    try {
-      document.body.removeAttribute('style');
-      document.documentElement.removeAttribute('style');
-      document.body.style.setProperty('overflow', 'auto', 'important');
-      document.body.style.setProperty('position', 'static', 'important');
-      document.body.style.setProperty('height', 'auto', 'important');
-      document.body.style.setProperty('width', 'auto', 'important');
-      document.documentElement.style.setProperty('overflow', 'auto', 'important');
-      
-      if (!document.getElementById('force-scroll-fix')) {
-        const style = document.createElement('style');
-        style.id = 'force-scroll-fix';
-        style.textContent = ` body, html { overflow: auto !important; position: static !important; height: auto !important; width: auto !important; } `;
-        document.head.appendChild(style);
-      }
-    } catch (e) {
-      console.debug('Scroll fix error:', e);
-    }
-  }
-
-  // --- NAVIGATION CONTROL (Fra AutoClick) ---
-
-  addBeforeUnloadListener() {
-    this._beforeUnloadHandler = (event) => {
-      event.preventDefault(); 
-      return false;
+    // Simulerer Browsertrix-miljøet (ctx) for Chrome-konsollen
+    const ctx = {
+        Lib: {
+            sleep: (ms) => new Promise(r => setTimeout(r, ms)),
+            // extractBrowserLinks krever ctx.Lib.addLink, men dette er ikke tilgjengelig i Chrome.
+            // Vi stubber den ut for å unngå feil.
+            addLink: (url) => { console.log(`[Bx Link Added] ${url}`); return Promise.resolve(); }
+        },
+        // Log-funksjon for Chrome-konsollen
+        log: (data) => console.log(`[Bx Log] ${data.msg}`, data) 
     };
-    window.addEventListener("beforeunload", this._beforeUnloadHandler);
-  }
 
-  removeBeforeUnloadListener() {
-    if (this._beforeUnloadHandler) {
-      window.removeEventListener("beforeunload", this._beforeUnloadHandler);
-      this._beforeUnloadHandler = null;
-    }
-  }
+    // Klassedefinisjonen (Tilpasset for å kjøre i Chrome)
+    class ScrollAndClick {
+      static id = "Scroll and Click";
+      static maxScrolls = 500;
+      selectors = [
+        "a",
+        "button",
+        "button.lc-load-more",
+        "span[role=treeitem]",
+        "button#load-more-posts",
+        "#pagenation"
+      ];
+      triggerwords = [
+        "se mere",
+        "åbn",
+        "flere kommentarer",
+        "se flere",
+        "indlæs flere nyheder",
+        "hent flere",
+        "vis flere"
+      ].map(t => t.toLowerCase());
 
-  // --- KLIKK-FUNKSJONALITET ---
-  
-  async clickAllA(ctx) {
-    let clicks = 0;
-    const allCandidates = document.querySelectorAll('a[href], a:not([href]), img[onclick], [role="button"], button, a img'); 
+      static isMatch(url) {
+        return true; 
+      }
 
-    for (const elem of allCandidates) {
-        if (this.seenElements.has(elem)) continue;
+      static init() {
+        return {};
+      }
 
-        let targetElem = elem;
-        let href = elem.getAttribute('href');
-        
-        if (elem.tagName === 'IMG' && elem.closest('a')) {
-            targetElem = elem.closest('a');
-            href = targetElem.getAttribute('href');
-        }
+      async extractBrowserLinks(ctx) {
+        const urls = new Set(Array.from(document.links, a => a.href).filter(Boolean));
+        // Bruker den simulerte ctx.Lib.addLink
+        await Promise.allSettled(Array.from(urls, url => ctx.Lib.addLink(url)));
+      }
 
-        let shouldClick = false;
-        let isNavigatingLink = false;
+      static runInIframes = false;
 
-        if (href === null || href === "" || targetElem.tagName === 'BUTTON' || targetElem.getAttribute('role') === 'button') {
-            shouldClick = true; 
-        } else if (href.startsWith('#') || href.startsWith('javascript:')) {
-            shouldClick = true; 
-        } else if (/\.(jpeg|jpg|gif|png|webp|svg)$/i.test(href.split('?')[0])) {
-            shouldClick = true; 
-        } else if (href && href.startsWith(self.location.origin) && href !== this.origPath) {
-             shouldClick = true;
-             isNavigatingLink = true;
-        } else {
-            continue;
-        }
+    // ----------------------------------------------------
+    // ROBUST CONSENT-FJERNER (Brukes FØR scrolling)
+    // ----------------------------------------------------
 
-        if (!shouldClick) continue;
-
+      removeConsentOverlay(ctx) {
         try {
-            const rect = targetElem.getBoundingClientRect();
-            const isInViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
-            if (!isInViewport) continue;
+          // Fjern SourcePoint/consent iframes
+          const consentIframes = document.querySelectorAll('iframe[src*="sp.api.no"], iframe[src*="sourcepoint"], iframe[src*="consent"]');
+          let iframeCount = 0;
+          consentIframes.forEach(iframe => {
+            iframe.remove();
+            iframeCount++;
+          });
             
-            this.seenElements.add(targetElem); 
+          // Fjern overlays (inkludert høy z-index og sp_message)
+          const overlays = document.querySelectorAll('[id*="sp_message"], [class*="sp_message"], div[style*="z-index: 2147483647"]');
+          let overlayCount = 0;
+          overlays.forEach(el => {
+            el.remove();
+            overlayCount++;
+          });
+            
+          // Gjenoppretter scrolling på body og html
+          document.body.style.overflow = 'auto';
+          document.body.style.position = 'static';
+          document.documentElement.style.overflow = 'auto';
+          document.documentElement.style.position = 'static';
 
-            if (isNavigatingLink) {
-                ctx.log({ msg: `Navigerende Lenke Klikket (Simulert AutoClick): ${href}.`, level: "warning" });
-            } else {
-                ctx.log({ msg: "Element klikket: Bursdagshilsen Utvidelse", tagName: targetElem.tagName, href: href || "[Ingen href]", level: "warning" });
-            }
-            
-            const origHref = self.location.href;
-            const origHistoryLen = self.history.length;
-            
-            targetElem.click();
-            clicks++;
-
-            await ctx.Lib.sleep(ctx.cfg.clickDelayMs); 
-            
-            if (isNavigatingLink) {
-                if (self.history.length === origHistoryLen + 1 && self.location.href != origHref) {
-                     ctx.log({ msg: "Navigasjon oppdaget (SPA/pushState). Simulerer history.back().", level: "info" });
-                }
-            }
+          if (iframeCount > 0 || overlayCount > 0) {
+            ctx.log({ 
+              msg: `Consent: Fjernet ${iframeCount} iframes og ${overlayCount} overlays. Scrolling gjenopprettet.`, 
+              level: "warning" 
+            });
+          }
 
         } catch (e) {
-             ctx.log({ msg: "Failed to click element", tagName: targetElem.tagName, href: href || "[Ingen href]", level: "warning", error: e.message });
+          ctx.log({ msg: `Consent: Feil under fjerning av overlay: ${e.message}`, level: "error" });
         }
-    }
-    return clicks;
-  }
-
-  // --- HOVEDUTFØRELSE ---
-
-  async* run(ctx) {
-    const makeState = (state, data) => {
-      const payload = { state, data };
-      if (ctx?.Lib?.getState) return ctx.Lib.getState(payload);
-      if (ctx?.getState)      return ctx.getState(payload);
-      return payload; 
-    };
-
-    const cfg = {
-      waitMs: 150,            
-      scrollStep: 600,       
-      stableLimit: 30,       
-      bottomHoldExtra: 5000, 
-      growthEps: 1,          
-      clickDelayMs: 1000, 
-      clickMaxRounds: 50
-    };
-    ctx.cfg = cfg; 
-    
-    this.addBeforeUnloadListener();
-    this.origPath = document.location.pathname;
-
-    const docHeight = () => Math.max( document.documentElement?.scrollHeight || 0, document.body?.scrollHeight || 0 );
-      
-    let totalClicks = 0;
-    let lastHeight = docHeight();
-    let stableRounds = 0;
-    let pulses = 0;
-      
-    yield makeState("autoscroll: started", { status: "loading", msg: "Locking Autoclick" }); 
-    
-    // ######################################################
-    // ## FASE 1: INFINITE SCROLLING
-    // ######################################################
-    
-    ctx.log({ msg: "FASE 1: Starter scrolling til stabil høyde er nådd." });
-
-    while (stableRounds < cfg.stableLimit) {
-      if (document.location.pathname !== this.origPath) {
-          ctx.log({ msg: "FASE 1: Lokasjon endret under scroll. Stopper.", level: "warning" });
-          break;
       }
 
-      yield makeState("autoscroll: progress", { pulses, stableRounds, status: "loading" }); 
-
-      window.scrollBy(0, cfg.scrollStep);
-      await ctx.Lib.sleep(cfg.waitMs); 
-      
-      yield makeState("autoscroll: pulse", { pulses, status: "loading" }); 
-      pulses++;
-
-      const atBottom = (window.innerHeight + window.scrollY) >= (docHeight() - 2);
-      
-      if (atBottom) {
-        await ctx.Lib.sleep(cfg.bottomHoldExtra); 
+      /**
+       * Tilpasset for Chrome: Erstatter Browsertrix sin awaitPageLoad
+       */
+      async _awaitPageLoad(ctx) {
+        // Kjører consent-fjerning før hovedsløyfen
+        this.removeConsentOverlay(ctx);
+        // Venter litt etter opprydding
+        await ctx.Lib.sleep(500); 
       }
 
-      const h = docHeight();
-      const grew = (h - lastHeight) > cfg.growthEps; 
-      
-      if (grew) stableRounds = 0;
-      else      stableRounds++;
-      
-      lastHeight = h;
-      
-      if (atBottom && !grew) {
-          ctx.log({ msg: "FASE 1: Stabil ved bunn av side. Bryter loop tidlig.", level: "warning" });
-          break;
-      }
-    }
+    // ----------------------------------------------------
+    // RUN-metoden (Hovedsløyfen)
+    // ----------------------------------------------------
 
-    ctx.log({ msg: `FASE 1 Fullført: Siden er stabil etter ${stableRounds} runder.` });
+      async* run(ctx) {
+        let click = 0;
+        const DomElementsMinimumChange = 10;
+        let consecutiveSmallChanges = 0;
 
-    // ######################################################
-    // ## FASE 2: KLIKK PÅ LENKER
-    // ######################################################
-    
-    ctx.log({ msg: "FASE 2: Starter klikk på utvidende elementer." });
-    
-    let clicksThisRound = 0;
-    let clickRounds = 0;
+        let lastCount = document.body.getElementsByTagName("*").length;
+        let stableTime = 0;
+        let iterations = 0;
 
-    do {
-        clicksThisRound = await this.clickAllA(ctx); 
+        while (true) {
+          if (++iterations > ScrollAndClick.maxScrolls) {
+            ctx.log({ msg: "Max scrolls reached", iterations });
+            break;
+          }
 
-        totalClicks += clicksThisRound;
-        clickRounds++;
+          // scroll to bottom
+          window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+          // Bruker Promise for å simulere ctx.Lib.sleep
+          await ctx.Lib.sleep(1000); 
 
-        if (clicksThisRound > 0) {
-            ctx.log({ msg: `Runde ${clickRounds}: Fant og klikket ${clicksThisRound} nye elementer.` });
-            yield makeState("autoclick: yielded", { status: "loading", msg: `Round ${clickRounds} complete, capturing content.` });
-        } else {
-            ctx.log({ msg: `Runde ${clickRounds}: Ingen nye elementer å klikke. Avslutter Klikk-fase.` });
+          // click if matched
+          const selectstring = this.selectors.join(",");
+          const elems = document.querySelectorAll(selectstring);
+          for (const elem of elems) {
+            const txt = (elem.innerText || elem.textContent || "").toLowerCase().trim();
+            if (this.triggerwords.some(w => w === txt)) {
+              elem.click();
+              click++;
+            }
+          }
+          if (elems.length > 0) {
+            ctx.log({ msg: "Clicked load more buttons", totalClicks: click, thisRound: elems.length });
+          }
+
+          // Bruker Promise for å simulere ctx.Lib.sleep
+          await ctx.Lib.sleep(1000);
+          await this.extractBrowserLinks(ctx);
+
+          // detect DOM changes by element count delta
+          const newCount = document.body.getElementsByTagName("*").length;
+          const delta = newCount - lastCount;
+          ctx.log({ msg: "DomElementsAfterScroll", newCount, delta });
+
+          if (delta >= DomElementsMinimumChange) {
+            consecutiveSmallChanges = 0;
+            stableTime = 0;
+          } else {
+            consecutiveSmallChanges += 1;
+            stableTime += 1000;
+          }
+
+          // update baseline for next iteration
+          lastCount = newCount;
+
+          // stop if 3 consecutive small changes
+          if (consecutiveSmallChanges >= 3) {
+            ctx.log({
+              msg: "Ending due to consecutive small DOM changes",
+              consecutiveSmallChanges,
+              threshold: DomElementsMinimumChange
+            });
+            break;
+          }
+
+          // stop if nothing changes for 10s
+          if (stableTime >= 10000) {
+            ctx.log({ msg: "No significant changes for 10 seconds, stopping scroll" });
+            break;
+          }
         }
-
-    } while (clicksThisRound > 0 && clickRounds < cfg.clickMaxRounds);
+      }
+    }
     
-    ctx.log({ msg: `FASE 2 Fullført: Totalt ${totalClicks} klikk på ${clickRounds} runder.` });
-    
-    // ######################################################
+    // --- Kjører skriptet i Chrome-konsollen ---
 
-    this.removeBeforeUnloadListener();
+    if (!ScrollAndClick.isMatch(window.location.href)) {
+        console.log("URL matcher ikke ScrollAndClick. Avslutter.");
+        return;
+    }
     
-    yield makeState("autoscroll: finished", { 
-        pulses, 
-        stableRounds, 
-        totalClicks, 
-        msg: "Releasing Autoclick Lock" 
-    });
-  }
-}
+    const behavior = new ScrollAndClick();
+    
+    // Utfører opprydding og venter
+    await behavior._awaitPageLoad(ctx);
 
+    // Kjører den asynkrone generatorfunksjonen
+    const generator = behavior.run(ctx);
+    let result = await generator.next();
+
+    while (!result.done) {
+        // I Browsertrix vil yield gi kontroll tilbake til kjernen, men her må vi bare fortsette
+        if (result.value instanceof Promise) {
+            await result.value; 
+        }
+        console.log(`[Bx State]`, result.value);
+        result = await generator.next();
+    }
+
+    console.log("--- Bx Scroll and Click Fullført ---");
+})();
