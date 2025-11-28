@@ -17,48 +17,64 @@ class ScrollAndClick {
   static init() {
     return {};
   }
-
-  /**
-   * Henter lenker, filtrerer etter Same Origin, og sender de unike til Browsertrix-køen.
-   * ctx.Lib.addLink() håndterer den globale dedupliseringen.
-   */
-  async extractAndQueueLinks(ctx) {
-    const uniqueUrls = new Set();
-    const allLinks = Array.from(document.links, a => a.href).filter(Boolean);
-    const currentOrigin = self.location.origin;
-    let queuedCount = 0;
     
-    // Samle og dedupliser alle lenker funnet i DOM
-    allLinks.forEach(url => uniqueUrls.add(url));
-
-    // Iterer over de unike lenkene og send kun interne lenker til køen
-    await Promise.allSettled(Array.from(uniqueUrls, async (url) => {
-        
-        // 1. Filtrer ut eksterne lenker
-        if (!url.startsWith(currentOrigin)) {
-            if (url.startsWith('http')) {
-                ctx.log({ msg: "Link rejected (External Domain)", url: url, level: "debug" });
-            }
-            return; 
-        }
-
-        // 2. Legg til i Browsertrix-køen (dette er den globale dedupliserings-sjekken)
-        ctx.log({ msg: "Link queued (Same Origin)", url: url, level: "info" });
-        await ctx.Lib.addLink(url);
-        queuedCount++;
-
-    }));
-
-
-    if (queuedCount > 0) {
-        ctx.log({ msg: `Successfully processed and queued ${queuedCount} Same Origin links.`, level: "debug" });
-    }
-  }
+  // Fjernet extractAndQueueLinks, vi stoler nå på autoclick-mekanismen for å eksponere innholdet.
 
   static runInIframes = false;
 
 // ----------------------------------------------------
-// CONSENT OG SCROLL FIX METODER
+// NY FUNKSJON: Autoclick for å eksponere innhold
+// ----------------------------------------------------
+
+  async performAutoclick(ctx) {
+    const selector = "a";
+    const currentOrigin = self.location.origin;
+    let clickedCount = 0;
+    
+    // Vi bruker en enkel Set for å hindre gjentatte klikk på samme lenke i denne fasen
+    const autoclickedUrls = new Set();
+    
+    // Henter alle klikkbare elementer
+    const allLinks = document.querySelectorAll(selector);
+
+    for (const el of allLinks) {
+        const elem = el as HTMLAnchorElement;
+
+        // 1. Filtrer: Kun Same Origin
+        if (!elem.href || !elem.href.startsWith(currentOrigin)) {
+            continue;
+        }
+
+        // 2. Filtrer: Sørg for at den er klikkbar og ikke usett
+        if (!elem.checkVisibility() || elem.target === '_blank' || autoclickedUrls.has(elem.href)) {
+            continue;
+        }
+
+        // Vi emulerer "addToExternalSet" ved å klikke, noe som utløser innhold.
+        // Vi bruker ctx.Lib.addLink her i stedet for klikk, for å sikre at URL-en kommer i køen for fremtidig crawling. 
+        // Hvis du vil at innholdet skal lastes NÅ, bruk elem.click() og stol på Browsertrix' opptak.
+        
+        ctx.log({ msg: "Autoclick: Sending link to queue and attempting click", url: elem.href, level: "debug" });
+
+        // Sender til køen for å sikre at URL-en blir vurdert for neste crawl
+        await ctx.Lib.addLink(elem.href); 
+        
+        // Klikker for å tvinge frem dynamisk innholdslasting på den nåværende siden
+        elem.click();
+        autoclickedUrls.add(elem.href);
+        clickedCount++;
+
+        // Vent litt etter klikk
+        await ctx.Lib.sleep(150); 
+    }
+    if (clickedCount > 0) {
+        ctx.log({ msg: `Autoclick fase: Klikket på ${clickedCount} unike interne lenker.`, level: "warning" });
+    }
+}
+
+
+// ----------------------------------------------------
+// CONSENT OG SCROLL FIX METODER (UENDRET)
 // ----------------------------------------------------
 
   removeConsentOverlay(ctx) {
@@ -119,11 +135,14 @@ class ScrollAndClick {
     await ctx.Lib.sleep(1000); 
   }
 
+
 // ----------------------------------------------------
 // RUN-metoden (HOVEDSLØYFE)
 // ----------------------------------------------------
 
   async* run(ctx) {
+    await this.awaitPageLoad(ctx);
+      
     const docHeight = () =>
       Math.max(
         document.documentElement?.scrollHeight || 0,
@@ -187,8 +206,8 @@ class ScrollAndClick {
         
         lastHeight = h;
         
-        // 💡 Kaller den oppdaterte funksjonen
-        await this.extractAndQueueLinks(ctx); 
+        // --- NYTT TRINN: Autoclick for å eksponere innhold før neste scroll ---
+        await this.performAutoclick(ctx); 
         
         if (pulses >= 100) {
             ctx.log({ msg: `Max pulses (${pulses}) reached. Stopping scroll.`, level: "warning" });
