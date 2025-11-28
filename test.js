@@ -1,11 +1,9 @@
 class ScrollAndClickBehavior
 {
-  static id = "ScrollAndClick: Infinite Scroll & Link Expansion (Sub-path Restricted)";
+  static id = "ScrollAndClick: Infinite Scroll & Link Expansion (Async Fix)";
   
-  // Brukes for å spore elementer som allerede er klikket
   seenElements = new WeakSet(); 
 
-  // Nødvendige statiske metoder for Browsertrix
   static isMatch() {
     try { return /^https?:/.test(window.location.href); }
     catch { return false; }
@@ -15,44 +13,25 @@ class ScrollAndClickBehavior
   }
   static runInIframes = false;
   
-  // --- Metoder for Overlays og Scroll-fiksing ---
+  // --- Metoder for Overlays og Scroll-fiksing (Uendret) ---
 
   async awaitPageLoad() {
     this.removeConsentOverlay();
     this.fixScroll();
-    
     await new Promise(r => setTimeout(r, 500));
   }
   
   removeConsentOverlay() {
     try {
-      const selectors = [
-        '[id*="sp_message"]', 
-        '[class*="sp_message"]', 
-        '[id*="cookie"]', 
-        '[class*="cookie"]', 
-        '[id*="consent"]', 
-        '[class*="consent"]',
-        'iframe[src*="sp.api.no"]',
-        'iframe[src*="sourcepoint"]',
-        'iframe[src*="consent"]'
-      ];
-      
-      document.querySelectorAll(selectors.join(', ')).forEach(el => {
-        el.remove();
-      });
-
+      const selectors = [ '[id*="sp_message"]', '[class*="sp_message"]', '[id*="cookie"]', '[class*="cookie"]', '[id*="consent"]', '[class*="consent"]', 'iframe[src*="sp.api.no"]', 'iframe[src*="sourcepoint"]', 'iframe[src*="consent"]' ];
+      document.querySelectorAll(selectors.join(', ')).forEach(el => { el.remove(); });
       const possibleBackdrops = document.querySelectorAll('div[style*="position: fixed"][style*="z-index"]');
       possibleBackdrops.forEach(el => {
-          if (el.innerText.length < 50 || el.innerText.includes("cookie") || el.innerText.includes("samtykke")) {
-              el.remove();
-          }
+          if (el.innerText.length < 50 || el.innerText.includes("cookie") || el.innerText.includes("samtykke")) { el.remove(); }
       });
-      
       document.body.style.overflow = 'auto';
       document.body.style.position = 'static';
       document.documentElement.style.overflow = 'auto';
-
     } catch (e) {
       console.error('[Bx] Feil under fjerning av overlays:', e);
     }
@@ -62,24 +41,15 @@ class ScrollAndClickBehavior
     try {
       document.body.removeAttribute('style');
       document.documentElement.removeAttribute('style');
-      
       document.body.style.setProperty('overflow', 'auto', 'important');
       document.body.style.setProperty('position', 'static', 'important');
       document.body.style.setProperty('height', 'auto', 'important');
       document.body.style.setProperty('width', 'auto', 'important');
       document.documentElement.style.setProperty('overflow', 'auto', 'important');
-      
       if (!document.getElementById('force-scroll-fix')) {
         const style = document.createElement('style');
         style.id = 'force-scroll-fix';
-        style.textContent = `
-          body, html {
-            overflow: auto !important;
-            position: static !important;
-            height: auto !important;
-            width: auto !important;
-          }
-        `;
+        style.textContent = ` body, html { overflow: auto !important; position: static !important; height: auto !important; width: auto !important; } `;
         document.head.appendChild(style);
       }
     } catch (e) {
@@ -87,66 +57,64 @@ class ScrollAndClickBehavior
     }
   }
   
-  // --- KLIKK-FUNKSJONALITET MED SUB-PATH REGLER (Uendret) ---
-
-  clickAllA(ctx) {
+  // --- KLIKK-FUNKSJONALITET (ASYNC FIX) ---
+  // Bruker async for å tillate 'await' for stabil klikk-forsinkelse
+  async clickAllA(ctx) {
     let clicks = 0;
-    const allCandidates = document.links; 
-    const currentPath = window.location.pathname; 
+    const allCandidates = document.querySelectorAll('a[href], a:not([href]), img[onclick], img[data-lightbox], img[data-src], img.clickable'); 
 
     for (const elem of allCandidates) {
         if (this.seenElements.has(elem)) continue;
 
-        const href = elem.getAttribute('href');
+        let href = elem.getAttribute('href');
+        if (elem.tagName === 'IMG') {
+            href = elem.getAttribute('data-src') || elem.getAttribute('src'); 
+        }
         
-        ctx.log({ msg: "Behandler lenke", href: href || "[Ingen href]", level: "info" });
+        ctx.log({ msg: "Behandler kandidat", tagName: elem.tagName, href: href || "[Ingen href]", level: "info" });
         
-        // --- SIKKERHETSSJEKK ---
         let shouldClick = false;
 
         if (href === null || href === "") {
-            ctx.log({ msg: "Lenke ignorert: Mangler href", level: "debug" });
-            continue;
-        } else if (href.startsWith('#') || href.startsWith('javascript:')) {
-            shouldClick = true;
-        } else if (href.startsWith('/')) {
-            if (href.startsWith(currentPath)) {
-                shouldClick = true; 
-            } else {
-                ctx.log({ msg: "Lenke ignorert: Relativ, men utenfor nåværende sti", href: href, level: "debug" });
+            if (elem.tagName === 'IMG' && (!elem.getAttribute('onclick') && !elem.closest('a'))) {
+                ctx.log({ msg: "Element ignorert: IMG uten href/onclick/lenke-forelder", level: "debug" });
+                continue;
             }
+            shouldClick = true; 
+        } else if (href.startsWith('#') || href.startsWith('javascript:')) {
+            shouldClick = true; 
+        } else if (/\.(jpeg|jpg|gif|png|webp|svg)$/i.test(href.split('?')[0])) {
+            shouldClick = true;
         } else {
-            ctx.log({ msg: "Lenke ignorert: Absolutt/Ekstern URL", href: href, level: "debug" });
-        }
-
-        if (!shouldClick) {
+            ctx.log({ msg: "Element ignorert: Navigerende URL (Absolutt/Relativ)", href: href, level: "debug" });
             continue;
         }
-        // ------------------------------------------
 
-        // Sjekk om elementet er i viewport
-        const rect = elem.getBoundingClientRect();
-        const isInViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
-        
-        if (!isInViewport) {
-            ctx.log({ msg: "Lenke ignorert: Ikke i viewport", href: href, level: "debug" });
-            continue;
-        }
+        if (!shouldClick) continue;
 
         try {
-            ctx.log({ msg: "Lenke klikket: OK (Innenfor sti)", href: href, level: "warning" });
+            const rect = elem.getBoundingClientRect();
+            const isInViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
+            if (!isInViewport) continue;
+            
+            this.seenElements.add(elem); 
+
+            ctx.log({ msg: "Element klikket: Potensiell lightbox/innholdsutvider", tagName: elem.tagName, href: href || "[Ingen href]", level: "warning" });
             
             elem.click();
-            this.seenElements.add(elem);
             clicks++;
+            
+            // 💡 Bruker 'await' for å pause mellom klikk for stabilitet
+            await ctx.Lib.sleep(ctx.cfg.clickDelayMs); 
+            
         } catch (e) {
-             ctx.log({ msg: "Failed to click <a> tag", href: href, level: "warning", error: e.message });
+             ctx.log({ msg: "Failed to click element", tagName: elem.tagName, href: href || "[Ingen href]", level: "warning", error: e.message });
         }
     }
     return clicks;
   }
 
-  // --- Hovedutførelsesmetode (Med FIX for stabilitet ved bunn) ---
+  // --- Hovedutførelsesmetode ---
 
   async* run(ctx) {
     const makeState = (state, data) => {
@@ -160,34 +128,29 @@ class ScrollAndClickBehavior
     // 📌 KONFIGURASJON
     // --------------------------
     const cfg = {
-      waitMs: 500,            
+      waitMs: 150,            
       scrollStep: 600,       
-      stableLimit: 60,       
+      stableLimit: 30,       
       bottomHoldExtra: 5000, 
       growthEps: 1,          
-      clickDelayMs: 500,
-      clickMaxRounds: 50 
+      clickDelayMs: 1000, 
+      clickMaxRounds: 50
     };
+    // Legg cfg til ctx for tilgang i clickAllA
+    ctx.cfg = cfg; 
     // --------------------------
 
-    const docHeight = () =>
-      Math.max(
-        document.documentElement?.scrollHeight || 0,
-        document.body?.scrollHeight || 0
-      );
+    const docHeight = () => Math.max( document.documentElement?.scrollHeight || 0, document.body?.scrollHeight || 0 );
       
-    // --- INITIALISERING ---
     let totalClicks = 0;
     let lastHeight = docHeight();
     let stableRounds = 0;
     let pulses = 0;
-    // ----------------------
       
-    // 🛑 FØRSTE KOMMANDO TIL BROWSERTRIX
     yield makeState("autoscroll: started", { status: "loading", msg: "Locking Autoclick" }); 
     
     // ######################################################
-    // ## FASE 1: INFINITE SCROLLING (TIL STABILITET ER NÅDD)
+    // ## FASE 1: INFINITE SCROLLING
     // ######################################################
     
     ctx.log({ msg: "FASE 1: Starter scrolling til stabil høyde er nådd." });
@@ -195,7 +158,6 @@ class ScrollAndClickBehavior
     while (stableRounds < cfg.stableLimit) {
       yield makeState("autoscroll: progress", { pulses, stableRounds, status: "loading" }); 
 
-      // --- SCROLLING ---
       window.scrollBy(0, cfg.scrollStep);
       await ctx.Lib.sleep(cfg.waitMs); 
       
@@ -216,8 +178,6 @@ class ScrollAndClickBehavior
       
       lastHeight = h;
       
-      // 💡 FIX: Bryt loop umiddelbart hvis vi er ved bunnen og siden ikke vokser.
-      // Dette forhindrer å vente på 60 runder når vi er ferdige.
       if (atBottom && !grew) {
           ctx.log({ msg: "FASE 1: Stabil ved bunn av side. Bryter loop tidlig.", level: "warning" });
           break;
@@ -230,20 +190,22 @@ class ScrollAndClickBehavior
     // ## FASE 2: KLIKK PÅ LENKER (ETTER SCROLL)
     // ######################################################
     
-    ctx.log({ msg: "FASE 2: Starter klikk på relative lenker." });
+    ctx.log({ msg: "FASE 2: Starter klikk på lenker som utvider innhold." });
     
     let clicksThisRound = 0;
     let clickRounds = 0;
 
-    // Gjenta klikkforsøk i tilfelle klikk utløser nytt innhold som krever nytt klikk.
     do {
-        clicksThisRound = this.clickAllA(ctx);
+        // 💡 Kaller clickAllA med 'await' da den nå er en ASYNC funksjon
+        clicksThisRound = await this.clickAllA(ctx); 
+
         totalClicks += clicksThisRound;
         clickRounds++;
 
         if (clicksThisRound > 0) {
-            ctx.log({ msg: `Runde ${clickRounds}: Klikket ${clicksThisRound} nye elementer.` });
-            await ctx.Lib.sleep(cfg.clickDelayMs); 
+            ctx.log({ msg: `Runde ${clickRounds}: Fant og klikket ${clicksThisRound} nye elementer.` });
+            // Yield *etter* en runde med klikk (fanger opp alle endringer)
+            yield makeState("autoclick: yielded", { status: "loading", msg: `Round ${clickRounds} complete` });
         } else {
             ctx.log({ msg: `Runde ${clickRounds}: Ingen nye elementer å klikke. Avslutter Klikk-fase.` });
         }
@@ -254,7 +216,6 @@ class ScrollAndClickBehavior
     
     // ######################################################
 
-    // 🔓 Siste yield: Sender ferdig-signal UTEN status: loading
     yield makeState("autoscroll: finished", { 
         pulses, 
         stableRounds, 
@@ -263,3 +224,5 @@ class ScrollAndClickBehavior
     });
   }
 }
+
+
