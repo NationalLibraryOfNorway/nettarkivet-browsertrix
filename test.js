@@ -71,7 +71,7 @@ class AutoScrollBehavior
     // 📌 NY KONFIGURASJON: VELDIG RASK & JEVN SCROLL
     // --------------------------
     const cfg = {
-      waitMs: 500,            // Redusert ventetid = Jevn og rask bevegelse (fra 2500)
+      waitMs: 250,            // Redusert ventetid = Jevn og rask bevegelse (fra 2500)
       scrollStep: 600,       // Stort steg = Rask fremdrift (fra 300)
       stableLimit: 5,       
       bottomHoldExtra: 5000, 
