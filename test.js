@@ -1,14 +1,7 @@
 class AutoScrollBehavior
 {
-  static id = "AutoScroll: infinite scroll (Fast & Smooth)";
-  static isMatch() {
-    try { return /^https?:/.test(window.location.href); }
-    catch { return false; }
-  }
-  static init() {
-    return new AutoScrollBehavior();
-  }
-  static runInIframes = false;
+  static id = "AutoScroll: infinite scroll (Fast & Smooth, Bx Safe)";
+  // ... (unchanged methods: isMatch, init, runInIframes) ...
   
   async awaitPageLoad() {
     this.removeConsentOverlay();
@@ -68,12 +61,12 @@ class AutoScrollBehavior
     };
 
     // --------------------------
-    // 📌 NY KONFIGURASJON: VELDIG RASK & JEVN SCROLL
+    // 📌 KONFIGURASJON
     // --------------------------
     const cfg = {
-      waitMs: 100,            // Redusert ventetid = Jevn og rask bevegelse (fra 2500)
-      scrollStep: 300,       // Stort steg = Rask fremdrift (fra 300)
-      stableLimit: 25,       
+      waitMs: 500,            // Redusert ventetid = Jevn og rask bevegelse
+      scrollStep: 600,       // Stort steg = Rask fremdrift
+      stableLimit: 60,       
       bottomHoldExtra: 5000, 
       growthEps: 1,          
       clickDelayMs: 500      
@@ -91,6 +84,9 @@ class AutoScrollBehavior
     let pulses = 0;
     
     while (stableRounds < cfg.stableLimit) {
+      // VIKTIG: Sender busy-signal til Browsertrix
+      yield makeState("autoscroll: busy", { pulses, status: "scrolling" }); 
+
       window.scrollBy(0, cfg.scrollStep);
 
       yield makeState("autoscroll: pulse", { pulses });
@@ -101,9 +97,6 @@ class AutoScrollBehavior
       const atBottom = (window.innerHeight + window.scrollY) >= (docHeight() - 2);
       
       if (atBottom) {
-        // All klikk-logikk er fjernet herfra.
-        
-        // Venter ekstra tid når bunnen er nådd for å sikre at innholdet rekker å lastes
         await sleep(cfg.bottomHoldExtra);
       }
 
@@ -116,6 +109,7 @@ class AutoScrollBehavior
       lastHeight = h;
     }
 
+    // Sender ferdig-signal, og Browsertrix kan nå vurdere klikk
     yield makeState("autoscroll: finished", { pulses, stableRounds });
   }
 }
