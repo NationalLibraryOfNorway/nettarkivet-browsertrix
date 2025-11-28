@@ -60,31 +60,29 @@ class ScrollAndClick {
       document.body.style.overflow = 'auto';
       document.body.style.position = 'static';
       document.documentElement.style.overflow = 'auto';
-      document.documentElement.style.position = 'static';
+      document.documentElement.style.position = 'static';
 
-      if (iframeCount > 0 || overlayCount > 0) {
-        // Bruker ctx.log som forventet i Browsertrix
-        ctx.log({ 
-          msg: `Consent: Fjernet ${iframeCount} iframes og ${overlayCount} overlays. Scrolling gjenopprettet.`, 
-          level: "warning" 
-        });
-      }
+      if (iframeCount > 0 || overlayCount > 0) {
+        ctx.log({ 
+          msg: `Consent: Fjernet ${iframeCount} iframes og ${overlayCount} overlays. Scrolling gjenopprettet.`, 
+          level: "warning" 
+        });
+      }
 
     } catch (e) {
-      // Bruker ctx.log som forventet i Browsertrix
       ctx.log({ msg: `Consent: Feil under fjerning av overlay: ${e.message}`, level: "error" });
     }
   }
 
-  /**
-   * Browsertrix-standard oppstartsmetode.
-   */
-  async awaitPageLoad(ctx) {
-    // Kjører consent-fjerning før hovedsløyfen
-    this.removeConsentOverlay(ctx);
-    // Bruker ctx.Lib.sleep som forventet i Browsertrix
-    await ctx.Lib.sleep(500); 
-  }
+  /**
+   * Browsertrix-standard oppstartsmetode.
+   */
+  async awaitPageLoad(ctx) {
+    // Kjører consent-fjerning før hovedsløyfen
+    this.removeConsentOverlay(ctx);
+    // Bruker ctx.Lib.sleep som forventet i Browsertrix
+    await ctx.Lib.sleep(500); 
+  }
 
 // ----------------------------------------------------
 // RUN-metoden (Hovedsløyfen)
@@ -95,9 +93,14 @@ class ScrollAndClick {
     const DomElementsMinimumChange = 10;
     let consecutiveSmallChanges = 0;
 
-    let lastCount = document.body.getElementsByTagName("*").length;
-    let stableTime = 0;
+    // 🛑 NYTT: Initialiser lastCount HER, etter at awaitPageLoad (med opprydding) har kjørt
+    const initialCount = document.body.getElementsByTagName("*").length;
+    let lastCount = initialCount; 
+    
+    let stableTime = 0;
     let iterations = 0;
+
+    ctx.log({ msg: "Starting scroll loop", initialDomCount: initialCount });
 
     while (true) {
       if (++iterations > ScrollAndClick.maxScrolls) {
@@ -107,8 +110,7 @@ class ScrollAndClick {
 
       // scroll to bottom
       window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-      // Bruker yield for å returnere kontroll til kjernen og simulere sleep
-      yield ctx.Lib.sleep(1000); 
+      yield ctx.Lib.sleep(1000); 
 
       // click if matched
       const selectstring = this.selectors.join(",");
@@ -117,6 +119,8 @@ class ScrollAndClick {
         const txt = (elem.innerText || elem.textContent || "").toLowerCase().trim();
         if (this.triggerwords.some(w => w === txt)) {
           elem.click();
+          // NYTT: Kort pause etter klikk for å la innholdet lastes/DOM endres
+          yield ctx.Lib.sleep(200); 
           click++;
         }
       }
@@ -124,7 +128,6 @@ class ScrollAndClick {
         ctx.log({ msg: "Clicked load more buttons", totalClicks: click, thisRound: elems.length });
       }
 
-      // Bruker yield for å returnere kontroll til kjernen og simulere sleep
       yield ctx.Lib.sleep(1000);
       await this.extractBrowserLinks(ctx);
 
