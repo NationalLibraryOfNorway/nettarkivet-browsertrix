@@ -17,29 +17,31 @@ class ScrollAndClick {
   }
 
   static init() {
-    return {};
+    return new ScrollAndClick();
   }
 
-  // NY OG ANBEFALT METODE FOR Å LEGGE URL I KØEN
+  static runInIframes = false;
+
+  // Riktig metode for å legge URL i køen i Browsertrix
   queueUrl(url, ctx) {
-    // Normaliser URL (fjerner #hash hvis du vil)
-    const cleanUrl = url.split("#")[0];
-
-    // Send melding til Browsertrix-crawlerens kjerne
-    window.postMessage({
-      type: "ADD_SEED",
-      url: cleanUrl,
-      // Valgfritt: begrens dybden fra denne lenken (1 = kun selve siden)
-      depth: 1,
-      // Valgfritt: begrens til samme domene som nåværende side
-      limitToScope: true
-    }, "*");
-
-    ctx.log({
-      msg: "URL lagt i køen via postMessage (ADD_SEED)",
-      url: cleanUrl,
-      level: "info"
-    });
+    try {
+      const cleanUrl = url.split("#")[0];
+      
+      // I Browsertrix behaviors bruker vi self.__bx_behaviors.addLink
+      // eller ctx.Lib kan ha en metode for dette
+      if (typeof self !== 'undefined' && self.__bx_behaviors && self.__bx_behaviors.addLink) {
+        self.__bx_behaviors.addLink(cleanUrl);
+      } else if (ctx?.Lib?.addLink) {
+        ctx.Lib.addLink(cleanUrl);
+      } else {
+        // Prøv global addLink
+        if (typeof addLink === 'function') {
+          addLink(cleanUrl);
+        }
+      }
+    } catch (e) {
+      // Silent fail - ikke stopp behavior ved feil
+    }
   }
 
   async extractAndQueueLinks(ctx) {
@@ -181,6 +183,3 @@ class ScrollAndClick {
     });
   }
 }
-
-// Eksporter for Browsertrix
-module.exports = ScrollAndClick;
