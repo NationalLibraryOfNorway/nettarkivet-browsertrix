@@ -62,13 +62,15 @@ class AutoScrollBehavior
   }
 
   /**
-   * Finner den neste usynlige, same-origin lenken ('a' tagg).
+   * Finner den neste usynlige, same-origin lenken/knappen.
+   * Strengere selektor for å unngå hard navigasjon.
    */
-  nextSameOriginLink(selector = "a") { // Endret returtype til å være mindre streng
+  nextSameOriginLink(selector = "a[role='button'], button, a[href='']") {
     try {
-      const allLinks = document.querySelectorAll(selector);
-      for (const el of allLinks) {
-        // Bruk element direkte uten unødvendig konvertering for å unngå syntax
+      // Bruk den strengere selektoren for å prioritere non-navigation elementer
+      const allCandidates = document.querySelectorAll(selector);
+      
+      for (const el of allCandidates) {
         const element = el; 
 
         // Sjekk for same-origin (kun interne lenker)
@@ -79,7 +81,7 @@ class AutoScrollBehavior
           continue;
         }
         
-        // Sjekk for synlighet (enkel fallback hvis checkVisibility mangler)
+        // Sjekk for synlighet
         if (typeof element.checkVisibility === 'function') {
             if (!element.checkVisibility()) {
                 continue;
@@ -93,9 +95,14 @@ class AutoScrollBehavior
           continue;
         }
         
-        // Marker som sett (blir klikket i processElem) og returner
         return element;
       }
+      
+      // Fallback: Hvis ingen eksplisitte knapper/roller er funnet, prøv alle synlige a-tagger
+      if (selector !== 'a') {
+          return this.nextSameOriginLink('a'); 
+      }
+      
     } catch (e) {
       console.debug('Link selection error:', e.toString());
     }
@@ -106,8 +113,8 @@ class AutoScrollBehavior
   /**
    * Utfører klikk og håndterer eventuell navigasjon (går tilbake).
    */
-  async processElem(elem, sleep) { // Fjernet typesjekk i argumenter
-    // Legg til i settet FØR klikk (Browsertrix-stil)
+  async processElem(elem, sleep) { 
+    // Legg til i settet FØR klikk
     this.seenElem.add(elem);
 
     if (elem.getAttribute('target') === '_blank') {
@@ -117,19 +124,26 @@ class AutoScrollBehavior
     const origHref = window.location.href;
     const origHistoryLen = window.history.length;
 
-    // Klikk elementet
-    if (elem.click) {
-      elem.click();
-    } else if (elem.dispatchEvent) {
-      elem.dispatchEvent(new MouseEvent("click"));
+    try {
+        // Klikk elementet
+        if (elem.click) {
+          elem.click();
+        } else if (elem.dispatchEvent) {
+          elem.dispatchEvent(new MouseEvent("click"));
+        }
+    } catch (e) {
+        // Ignorer eventuelle feil ved klikk (f.eks. elementet ble fjernet før klikk)
+        console.debug('Click failed:', e);
+        return;
     }
+
 
     await sleep(250);
 
-    // Gå tilbake i historikken hvis det har vært navigasjon
+    // Gå tilbake i historikken HVIS det har vært en PUSH-navigasjon og URL-en har endret seg.
     if (
       window.history.length === origHistoryLen + 1 &&
-      window.location.href != origHref
+      window.location.href !== origHref
     ) {
       await new Promise((resolve) => {
         window.addEventListener(
@@ -140,6 +154,7 @@ class AutoScrollBehavior
           { once: true },
         );
 
+        // Kaller history.back()
         window.history.back();
       });
     }
@@ -204,8 +219,8 @@ class AutoScrollBehavior
     // 📌 KONFIGURASJON
     // --------------------------
     const cfg = {
-      waitMs: 400,           
-      scrollStep: 450,       
+      waitMs: 750,           
+      scrollStep: 150,       
       stableLimit: 25,       
       bottomHoldExtra: 2000, 
       growthEps: 1,          
@@ -245,10 +260,9 @@ class AutoScrollBehavior
         let linksExplored = 0;
         let elem = null;
         
-        // Utforsk maks 5 lenker per puls ved bunnen
         const maxLinksToExplore = 5; 
         
-        while ((elem = this.nextSameOriginLink('a')) && linksExplored < maxLinksToExplore) {
+        while ((elem = this.nextSameOriginLink()) && linksExplored < maxLinksToExplore) {
             await this.processElem(elem, sleep);
             linksExplored++;
             actionTaken = true;
