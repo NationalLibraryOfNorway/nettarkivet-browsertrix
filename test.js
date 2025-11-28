@@ -18,12 +18,10 @@ class ScrollAndClick {
     return {};
   }
     
-  // Fjernet extractAndQueueLinks, vi stoler nå på autoclick-mekanismen for å eksponere innholdet.
-
   static runInIframes = false;
 
 // ----------------------------------------------------
-// NY FUNKSJON: Autoclick for å eksponere innhold
+// NY FUNKSJON: Autoclick for å eksponere og kø-sette innhold
 // ----------------------------------------------------
 
   async performAutoclick(ctx) {
@@ -31,14 +29,15 @@ class ScrollAndClick {
     const currentOrigin = self.location.origin;
     let clickedCount = 0;
     
-    // Vi bruker en enkel Set for å hindre gjentatte klikk på samme lenke i denne fasen
+    // Vi bruker en enkel Set for å hindre gjentatte klikk på samme URL i denne fasen
     const autoclickedUrls = new Set();
     
-    // Henter alle klikkbare elementer
+    // Henter alle klikkbare elementer (anker-tagger)
     const allLinks = document.querySelectorAll(selector);
 
     for (const el of allLinks) {
-        const elem = el as HTMLAnchorElement;
+        // KORREKSJON: Bruker JSDoc typehinting i stedet for 'as' (Løser SyntaxError)
+        const elem = /** @type {HTMLAnchorElement} */ (el);
 
         // 1. Filtrer: Kun Same Origin
         if (!elem.href || !elem.href.startsWith(currentOrigin)) {
@@ -50,13 +49,9 @@ class ScrollAndClick {
             continue;
         }
 
-        // Vi emulerer "addToExternalSet" ved å klikke, noe som utløser innhold.
-        // Vi bruker ctx.Lib.addLink her i stedet for klikk, for å sikre at URL-en kommer i køen for fremtidig crawling. 
-        // Hvis du vil at innholdet skal lastes NÅ, bruk elem.click() og stol på Browsertrix' opptak.
-        
         ctx.log({ msg: "Autoclick: Sending link to queue and attempting click", url: elem.href, level: "debug" });
 
-        // Sender til køen for å sikre at URL-en blir vurdert for neste crawl
+        // Sender til køen (ctx.Lib.addLink emulerer addToExternalSet for global deduplisering)
         await ctx.Lib.addLink(elem.href); 
         
         // Klikker for å tvinge frem dynamisk innholdslasting på den nåværende siden
@@ -173,7 +168,7 @@ class ScrollAndClick {
 
         await ctx.Lib.sleep(cfg.waitMs); 
         
-        // 2. KLIKK LOGIKK
+        // 2. KLIKK LOGIKK (Load More)
         const selectstring = this.selectors.join(",");
         const elems = document.querySelectorAll(selectstring);
         let clicksThisRound = 0;
@@ -206,7 +201,7 @@ class ScrollAndClick {
         
         lastHeight = h;
         
-        // --- NYTT TRINN: Autoclick for å eksponere innhold før neste scroll ---
+        // --- TRINN 5: Autoclick for å eksponere innhold ---
         await this.performAutoclick(ctx); 
         
         if (pulses >= 100) {
