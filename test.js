@@ -1,17 +1,15 @@
 class AutoScrollBehavior
 {
-  static id = "AutoScroll: infinite scroll (Fast & Smooth, Bx Safe)";
-  
-  // Statiske metoder nødvendig for Browsertrix/Generelle Behavior-rammeverk:
-  static isMatch() { 
+  static id = "AutoScroll: infinite scroll (Bx Safe, Standard Status)";
+  static isMatch() {
     try { return /^https?:/.test(window.location.href); }
     catch { return false; }
   }
-  static init() { 
+  static init() {
     return new AutoScrollBehavior();
   }
   static runInIframes = false;
-
+  
   async awaitPageLoad() {
     this.removeConsentOverlay();
     this.fixScroll();
@@ -93,12 +91,19 @@ class AutoScrollBehavior
     let pulses = 0;
     
     while (stableRounds < cfg.stableLimit) {
-      // VIKTIG: Sender busy-signal for å hindre Browsertrix i å klikke
-      yield makeState("autoscroll: busy", { pulses, status: "scrolling" }); 
+      // VIKTIG ENDRING: Bruker standard 'status: loading'
+      const stateData = { 
+          pulses, 
+          status: "loading" // Forteller Browsertrix: "Ikke klikk, jeg laster innhold"
+      };
+
+      // Første yield med status: loading før scroll
+      yield makeState("autoscroll: status", stateData); 
 
       window.scrollBy(0, cfg.scrollStep);
 
-      yield makeState("autoscroll: pulse", { pulses });
+      // Andre yield med status: loading etter scroll/før sleep
+      yield makeState("autoscroll: pulse", stateData);
       pulses++;
 
       await sleep(cfg.waitMs);
@@ -118,7 +123,7 @@ class AutoScrollBehavior
       lastHeight = h;
     }
 
-    // Sender ferdig-signal, og Browsertrix kan nå vurdere klikk
-    yield makeState("autoscroll: finished", { pulses, stableRounds });
+    // Sender ferdig-signal, fjerner "loading" statusen
+    yield makeState("autoscroll: finished", { pulses, stableRounds, status: "finished" });
   }
 }
