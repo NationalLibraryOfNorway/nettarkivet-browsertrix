@@ -19,22 +19,39 @@ class ScrollAndClick {
   }
 
   /**
-   * Henter lenker fra siden og logger dem før de legges til Browsertrix-køen.
+   * Henter lenker, filtrerer etter Same Origin, og sender de unike til Browsertrix-køen.
+   * ctx.Lib.addLink() håndterer den globale dedupliseringen.
    */
-  async extractBrowserLinks(ctx) {
-    const allUrls = Array.from(document.links, a => a.href).filter(Boolean);
-    const uniqueUrls = new Set(allUrls);
-    let addedCount = 0;
+  async extractAndQueueLinks(ctx) {
+    const uniqueUrls = new Set();
+    const allLinks = Array.from(document.links, a => a.href).filter(Boolean);
+    const currentOrigin = self.location.origin;
+    let queuedCount = 0;
     
-    await Promise.allSettled(Array.from(uniqueUrls, url => {
-        // Logging av URL før den legges til køen
-        ctx.log({ msg: "Link extracted", url: url, level: "info" });
-        addedCount++;
-        return ctx.Lib.addLink(url);
+    // Samle og dedupliser alle lenker funnet i DOM
+    allLinks.forEach(url => uniqueUrls.add(url));
+
+    // Iterer over de unike lenkene og send kun interne lenker til køen
+    await Promise.allSettled(Array.from(uniqueUrls, async (url) => {
+        
+        // 1. Filtrer ut eksterne lenker
+        if (!url.startsWith(currentOrigin)) {
+            if (url.startsWith('http')) {
+                ctx.log({ msg: "Link rejected (External Domain)", url: url, level: "debug" });
+            }
+            return; 
+        }
+
+        // 2. Legg til i Browsertrix-køen (dette er den globale dedupliserings-sjekken)
+        ctx.log({ msg: "Link queued (Same Origin)", url: url, level: "info" });
+        await ctx.Lib.addLink(url);
+        queuedCount++;
+
     }));
 
-    if (addedCount > 0) {
-        ctx.log({ msg: `Successfully extracted and added ${addedCount} unique links.`, level: "debug" });
+
+    if (queuedCount > 0) {
+        ctx.log({ msg: `Successfully processed and queued ${queuedCount} Same Origin links.`, level: "debug" });
     }
   }
 
@@ -170,7 +187,8 @@ class ScrollAndClick {
         
         lastHeight = h;
         
-        await this.extractBrowserLinks(ctx); // <--- Kaller nå den oppdaterte funksjonen
+        // 💡 Kaller den oppdaterte funksjonen
+        await this.extractAndQueueLinks(ctx); 
         
         if (pulses >= 100) {
             ctx.log({ msg: `Max pulses (${pulses}) reached. Stopping scroll.`, level: "warning" });
