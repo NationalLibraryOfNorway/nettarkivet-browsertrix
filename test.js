@@ -34,7 +34,7 @@ class ScrollAndClickBehavior
       
       document.querySelectorAll(selectors.join(', ')).forEach(el => {
         el.remove();
-        console.log(`[Bx] Fjernet overlay: ${el.tagName}`);
+        // console.log(`[Bx] Fjernet overlay: ${el.tagName}`); // Fjernet logging for renere konsoll
       });
 
       // 2. Fjerner potensielle blokkerende bakgrunner (dimmers)
@@ -42,7 +42,6 @@ class ScrollAndClickBehavior
       possibleBackdrops.forEach(el => {
           if (el.innerText.length < 50) {
               el.remove();
-              console.log(`[Bx] Fjernet potensiell backdrop: ${el.tagName}`);
           }
       });
       
@@ -152,17 +151,22 @@ class ScrollAndClickBehavior
         document.body?.scrollHeight || 0
       );
       
+    // --------------------------
+    // ✅ KORRIGERT INITIALISERING AV TILSTAND (Fikser lastHeight is not defined)
+    let totalClicks = 0;
+    let stableRounds = 0; // Høyde-stabilitet
+    let consecutiveSmallChanges = 0; // DOM-element-stabilitet
+    let pulses = 0;
+    
+    let lastHeight = docHeight(); // Første initialisering
+    let lastCount = document.body.getElementsByTagName("*").length; // Første initialisering
+    // --------------------------
+
     // 🛑 FØRSTE KOMMANDO: SENDER STATUSEN UMIDDELBART
     yield makeState("autoscroll: started", { status: "loading", msg: "Locking Autoclick" }); 
     
-    // Kjører fjerning igjen i tilfelle noe ble lastet asynkront
+    // Kjører fjerning igjen
     this.removeOverlays(); 
-    
-    let lastCount = document.body.getElementsByTagName("*").length;
-    let totalClicks = 0;
-    let stableRounds = 0;
-    let consecutiveSmallChanges = 0;
-    let pulses = 0;
     
     while (stableRounds < cfg.stableLimit) {
       
@@ -173,19 +177,18 @@ class ScrollAndClickBehavior
       window.scrollBy(0, cfg.scrollStep);
       await ctx.Lib.sleep(cfg.waitMs); 
 
-      // --- KLIKKING (Ny Logikk) ---
+      // --- KLIKKING ---
       const clicksThisRound = this.clickAllA(ctx);
       totalClicks += clicksThisRound;
       
       if (clicksThisRound > 0) {
         ctx.log({ msg: `Clicked ${clicksThisRound} new <a> elements`, totalClicks });
-        await ctx.Lib.sleep(cfg.clickDelayMs); // Vent etter klikk
+        await ctx.Lib.sleep(cfg.clickDelayMs); 
       }
       
       // --- STABILITETSSJEKK ---
       const newCount = document.body.getElementsByTagName("*").length;
       const delta = newCount - lastCount;
-      // Vår opprinnelige sjekk: bruker delta og stableRounds, men vi fortsetter med din DomElementsMinimumChange
       
       if (delta >= DomElementsMinimumChange) {
         consecutiveSmallChanges = 0;
@@ -193,13 +196,13 @@ class ScrollAndClickBehavior
         consecutiveSmallChanges += 1;
       }
       
-      // Din originale Høydevekst sjekk (bruker cfg.stableLimit)
       const h = docHeight();
       const grew = (h - lastHeight) > cfg.growthEps;
       
       if (grew) stableRounds = 0;
       else      stableRounds++;
       
+      // Oppdaterer for NESTE iterasjon
       lastCount = newCount;
       lastHeight = h;
       pulses++;
@@ -217,7 +220,7 @@ class ScrollAndClickBehavior
         await ctx.Lib.sleep(cfg.bottomHoldExtra); 
       }
 
-      // 🛑 Tidlig stopp basert på DOM-telling (fra din forrige logikk)
+      // 🛑 Tidlig stopp basert på DOM-telling
       if (consecutiveSmallChanges >= 3) {
         ctx.log({ msg: "Ending due to consecutive small DOM changes (DOM count)", consecutiveSmallChanges });
         break;
