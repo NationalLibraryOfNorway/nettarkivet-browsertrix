@@ -24,10 +24,8 @@ class ScrollAndClickBehavior
     await new Promise(r => setTimeout(r, 500));
   }
   
-  // ✅ GJENOPPRETTET: Den mer robuste versjonen av removeConsentOverlay
   removeConsentOverlay() {
     try {
-      // 1. Fjerner vanlige cookie-bokser, samtykke-iframes og generiske overlays
       const selectors = [
         '[id*="sp_message"]', 
         '[class*="sp_message"]', 
@@ -37,24 +35,20 @@ class ScrollAndClickBehavior
         '[class*="consent"]',
         'iframe[src*="sp.api.no"]',
         'iframe[src*="sourcepoint"]',
-        'iframe[src*="consent"]' // Lagt til for full dekning
+        'iframe[src*="consent"]'
       ];
       
       document.querySelectorAll(selectors.join(', ')).forEach(el => {
         el.remove();
       });
 
-      // 2. Fjerner potensielle blokkerende bakgrunner (dimmers)
-      // Dette tar sikte på generiske overlays med høy z-index
       const possibleBackdrops = document.querySelectorAll('div[style*="position: fixed"][style*="z-index"]');
       possibleBackdrops.forEach(el => {
-          // Sikrer at vi ikke fjerner legitimt innhold (sjekker typisk for små eller tomme overlays)
           if (el.innerText.length < 50 || el.innerText.includes("cookie") || el.innerText.includes("samtykke")) {
               el.remove();
           }
       });
       
-      // 3. Fikser scrolling som ofte blir blokkert av overlays
       document.body.style.overflow = 'auto';
       document.body.style.position = 'static';
       document.documentElement.style.overflow = 'auto';
@@ -64,7 +58,6 @@ class ScrollAndClickBehavior
     }
   }
   
-  // fixScroll metoden er uendret
   fixScroll() {
     try {
       document.body.removeAttribute('style');
@@ -94,7 +87,7 @@ class ScrollAndClickBehavior
     }
   }
   
-  // --- KLIKK-FUNKSJONALITET MED SUB-PATH REGLER (Uendret) ---
+  // --- KLIKK-FUNKSJONALITET MED SUB-PATH REGLER ---
 
   clickAllA(ctx) {
     let clicks = 0;
@@ -153,7 +146,7 @@ class ScrollAndClickBehavior
     return clicks;
   }
 
-  // --- Hovedutførelsesmetode (Uendret) ---
+  // --- Hovedutførelsesmetode (NY LOGIKK) ---
 
   async* run(ctx) {
     const makeState = (state, data) => {
@@ -172,7 +165,8 @@ class ScrollAndClickBehavior
       stableLimit: 60,       
       bottomHoldExtra: 5000, 
       growthEps: 1,          
-      clickDelayMs: 500      
+      clickDelayMs: 500,
+      clickMaxRounds: 50 // Ny konfigurasjon: Maks runder med klikk-forsøk (for å hindre uendelig loop)
     };
     // --------------------------
 
@@ -192,6 +186,12 @@ class ScrollAndClickBehavior
     // 🛑 FØRSTE KOMMANDO TIL BROWSERTRIX
     yield makeState("autoscroll: started", { status: "loading", msg: "Locking Autoclick" }); 
     
+    // ######################################################
+    // ## FASE 1: INFINITE SCROLLING (TIL STABILITET ER NÅDD)
+    // ######################################################
+    
+    ctx.log({ msg: "FASE 1: Starter scrolling til stabil høyde er nådd." });
+
     while (stableRounds < cfg.stableLimit) {
       yield makeState("autoscroll: progress", { pulses, stableRounds, status: "loading" }); 
 
@@ -199,14 +199,8 @@ class ScrollAndClickBehavior
       window.scrollBy(0, cfg.scrollStep);
       await ctx.Lib.sleep(cfg.waitMs); 
       
-      // --- KLIKKING ---
-      const clicksThisRound = this.clickAllA(ctx);
-      totalClicks += clicksThisRound;
-
-      if (clicksThisRound > 0) {
-        await ctx.Lib.sleep(cfg.clickDelayMs); 
-      }
-
+      // Ingen klikk i denne fasen.
+      
       yield makeState("autoscroll: pulse", { pulses, status: "loading" }); 
       pulses++;
 
@@ -224,6 +218,37 @@ class ScrollAndClickBehavior
       
       lastHeight = h;
     }
+
+    ctx.log({ msg: `FASE 1 Fullført: Siden er stabil etter ${stableRounds} runder.` });
+
+    // ######################################################
+    // ## FASE 2: KLIKK PÅ LENKER (ETTER SCROLL)
+    // ######################################################
+    
+    ctx.log({ msg: "FASE 2: Starter klikk på relative lenker." });
+    
+    let clicksThisRound = 0;
+    let clickRounds = 0;
+
+    // Gjenta klikkforsøk i tilfelle klikk utløser nytt innhold som krever nytt klikk.
+    do {
+        clicksThisRound = this.clickAllA(ctx);
+        totalClicks += clicksThisRound;
+        clickRounds++;
+
+        if (clicksThisRound > 0) {
+            ctx.log({ msg: `Runde ${clickRounds}: Klikket ${clicksThisRound} nye elementer.` });
+            // Vent litt for å la DOM oppdatere seg etter klikk
+            await ctx.Lib.sleep(cfg.clickDelayMs); 
+        } else {
+            ctx.log({ msg: `Runde ${clickRounds}: Ingen nye elementer å klikke. Avslutter Klikk-fase.` });
+        }
+
+    } while (clicksThisRound > 0 && clickRounds < cfg.clickMaxRounds);
+    
+    ctx.log({ msg: `FASE 2 Fullført: Totalt ${totalClicks} klikk på ${clickRounds} runder.` });
+    
+    // ######################################################
 
     // 🔓 Siste yield: Sender ferdig-signal UTEN status: loading
     yield makeState("autoscroll: finished", { 
