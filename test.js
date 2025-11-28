@@ -1,6 +1,8 @@
 class AutoScrollBehavior
 {
-  static id = "AutoScroll: infinite scroll (Bx Safe, Robust Status)";
+  static id = "AutoScroll: infinite scroll (Bx Safe, Final Status)";
+  
+  // Nødvendige statiske metoder for Browsertrix
   static isMatch() {
     try { return /^https?:/.test(window.location.href); }
     catch { return false; }
@@ -9,7 +11,7 @@ class AutoScrollBehavior
     return new AutoScrollBehavior();
   }
   static runInIframes = false;
-  
+
   async awaitPageLoad() {
     this.removeConsentOverlay();
     this.fixScroll();
@@ -61,17 +63,17 @@ class AutoScrollBehavior
   async* run(ctx) {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     
-    // makeState forenklet for å kun sende et status-objekt til Browsertrix-kjernen.
+    // Gjør makeState nøytral for å tillate full kontroll over 'status: loading'
     const makeState = (state, data) => {
-      // Browsertrix lytter ofte til 'status' i data-objektet.
-      const payload = { state, data: { status: "loading", ...data } }; 
+      const payload = { state, data };
+      // Bruker ctx.getState/ctx.Lib.getState hvis tilgjengelig, ellers standard JS-objekt
       if (ctx?.Lib?.getState) return ctx.Lib.getState(payload);
       if (ctx?.getState)      return ctx.getState(payload);
       return payload; 
     };
 
     // --------------------------
-    // 📌 KONFIGURASJON: VELDIG RASK & JEVN SCROLL
+    // 📌 KONFIGURASJON
     // --------------------------
     const cfg = {
       waitMs: 500,            
@@ -89,20 +91,24 @@ class AutoScrollBehavior
         document.body?.scrollHeight || 0
       );
       
+    // 🛑 FØRSTE KOMMANDO: SENDER STATUSEN UMIDDELBART
+    // Dette forteller Browsertrix: "Jeg er i gang med en lasting, IKKE klikk."
+    yield makeState("autoscroll: started", { status: "loading", msg: "Locking Autoclick" }); 
+    // ------------------------------------------
+
     let lastHeight = docHeight();
     let stableRounds = 0;
     let pulses = 0;
     
     while (stableRounds < cfg.stableLimit) {
-      // VIKTIG ENDRING: makeState er nå den som legger til 'status: loading'
-      // Dette tvinger Browsertrix til å vente på at "lastingen" skal fullføres.
       
-      yield makeState("autoscroll: pulse", { pulses, stableRounds }); 
+      // Fortsett å sende busy/loading signal før scroll og vent
+      yield makeState("autoscroll: progress", { pulses, stableRounds, status: "loading" }); 
 
       window.scrollBy(0, cfg.scrollStep);
 
-      // Ikke nødvendig med et ekstra yield her, men beholdt for å markere progresjon
-      // yield makeState("autoscroll: progress", { pulses, stableRounds }); 
+      // Sørg for at 'status: loading' sendes også i denne yield-en
+      yield makeState("autoscroll: pulse", { pulses, status: "loading" }); 
       pulses++;
 
       await sleep(cfg.waitMs);
@@ -122,11 +128,8 @@ class AutoScrollBehavior
       lastHeight = h;
     }
 
-    // Sender ferdig-signal UTEN 'status: loading' i data-objektet
-    const finishedState = { pulses, stableRounds, status: "finished" };
-    if (ctx?.Lib?.getState) return ctx.Lib.getState({ state: "autoscroll: finished", data: finishedState });
-    if (ctx?.getState)      return ctx.getState({ state: "autoscroll: finished", data: finishedState });
-    
-    yield finishedState;
+    // 🔓 Siste yield: Sender ferdig-signal UTEN status: loading 
+    // Dette frigjør Browsertrix og lar den fortsette med sin vanlige logikk.
+    yield makeState("autoscroll: finished", { pulses, stableRounds, msg: "Releasing Autoclick Lock" });
   }
 }
