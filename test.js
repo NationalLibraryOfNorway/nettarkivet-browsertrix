@@ -97,7 +97,8 @@ class AutoScrollBehavior
         continue;
       }
       
-      const element = el as HTMLElement;
+      // LØSNING: Fjern 'as HTMLElement' for å unngå SyntaxError
+      const element = el; 
 
       // 1. Sjekk synlighet (offsetParent !== null betyr at elementet er i layouten)
       if (element.offsetParent !== null && element.offsetWidth > 10 && element.offsetHeight > 10) {
