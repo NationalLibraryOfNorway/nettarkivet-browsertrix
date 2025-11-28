@@ -1,6 +1,6 @@
 class AutoScrollBehavior
 {
-  static id = "AutoScroll: simple infinite scroll + autoclick";
+  static id = "AutoScroll: infinite scroll + full exploration";
   static isMatch() {
     try { return /^https?:/.test(window.location.href); }
     catch { return false; }
@@ -10,11 +10,10 @@ class AutoScrollBehavior
   }
   static runInIframes = false;
   
-  // NY VARIABEL: For å spore hvilke knapper som allerede er klikket
-  seenClickElem = new WeakSet();
+  // Brukes for å spore alle elementer (både knapper og lenker) som er klikket
+  seenElem = new WeakSet();
 
   async awaitPageLoad() {
-    // Fjern consent overlay og fiks scroll
     this.removeConsentOverlay();
     this.fixScroll();
     
@@ -23,11 +22,9 @@ class AutoScrollBehavior
   
   removeConsentOverlay() {
     try {
-      // Fjern SourcePoint/consent iframes
       const consentIframes = document.querySelectorAll('iframe[src*="sp.api.no"], iframe[src*="sourcepoint"], iframe[src*="consent"]');
       consentIframes.forEach(iframe => iframe.remove());
       
-      // Fjern overlays
       const overlays = document.querySelectorAll('[id*="sp_message"], [class*="sp_message"], div[style*="z-index: 2147483647"]');
       overlays.forEach(el => el.remove());
     } catch (e) {
@@ -37,18 +34,15 @@ class AutoScrollBehavior
   
   fixScroll() {
     try {
-      // Fjern inline styles
       document.body.removeAttribute('style');
       document.documentElement.removeAttribute('style');
       
-      // Sett riktige properties
       document.body.style.setProperty('overflow', 'auto', 'important');
       document.body.style.setProperty('position', 'static', 'important');
       document.body.style.setProperty('height', 'auto', 'important');
       document.body.style.setProperty('width', 'auto', 'important');
       document.documentElement.style.setProperty('overflow', 'auto', 'important');
       
-      // Legg til style tag
       if (!document.getElementById('force-scroll-fix')) {
         const style = document.createElement('style');
         style.id = 'force-scroll-fix';
@@ -66,16 +60,97 @@ class AutoScrollBehavior
       console.debug('Scroll fix error:', e);
     }
   }
+
+  /**
+   * Finner den neste usynlige, same-origin lenken ('a' tagg).
+   */
+  nextSameOriginLink(selector = "a"): HTMLElement | null {
+    try {
+      const allLinks = document.querySelectorAll(selector);
+      for (const el of allLinks) {
+        const element = el; 
+
+        // Sjekk for same-origin (kun interne lenker)
+        if (element.href && !element.href.startsWith(window.location.origin)) {
+          continue;
+        }
+        if (!element.isConnected) {
+          continue;
+        }
+        
+        // Sjekk for synlighet (enkel fallback hvis checkVisibility mangler)
+        if (typeof element.checkVisibility === 'function') {
+            if (!element.checkVisibility()) {
+                continue;
+            }
+        } else if (element.offsetParent === null) {
+            continue;
+        }
+        
+        // Sjekk om den er klikket før
+        if (this.seenElem.has(element)) {
+          continue;
+        }
+        
+        // Marker som sett (blir klikket i processElem) og returner
+        return element;
+      }
+    } catch (e) {
+      console.debug('Link selection error:', e.toString());
+    }
+
+    return null;
+  }
   
   /**
-   * Finner og klikker på en "Last inn mer"-knapp.
-   * Bruker WeakSet for å unngå å klikke på samme knapp flere ganger.
+   * Utfører klikk og håndterer eventuell navigasjon (går tilbake).
+   */
+  async processElem(elem: HTMLElement, sleep: (ms: number) => Promise<void>) {
+    // Legg til i settet FØR klikk (Browsertrix-stil)
+    this.seenElem.add(elem);
+
+    if (elem.getAttribute('target') === '_blank') {
+      return;
+    }
+
+    const origHref = window.location.href;
+    const origHistoryLen = window.history.length;
+
+    // Klikk elementet
+    if (elem.click) {
+      elem.click();
+    } else if (elem.dispatchEvent) {
+      elem.dispatchEvent(new MouseEvent("click"));
+    }
+
+    await sleep(250);
+
+    // Gå tilbake i historikken hvis det har vært navigasjon
+    if (
+      window.history.length === origHistoryLen + 1 &&
+      window.location.href != origHref
+    ) {
+      await new Promise((resolve) => {
+        window.addEventListener(
+          "popstate",
+          () => {
+            resolve(null);
+          },
+          { once: true },
+        );
+
+        window.history.back();
+      });
+    }
+  }
+
+  /**
+   * Finner og klikker på en dedikert "Last inn mer"-knapp.
    * Returnerer true hvis en knapp ble klikket.
    */
   autoClickLoadMore() {
     const textPatterns = /load more|vis mer|last inn|flere|more|next|continue|show/i;
     
-    // Kombinert liste over vanlige selektorer for "last inn mer"-knapper
     const selectors = [
       'button:not([disabled])',
       'a[role="button"]:not([disabled])',
@@ -92,32 +167,27 @@ class AutoScrollBehavior
     const candidates = document.querySelectorAll(allSelectors);
     
     for (const el of candidates) {
-      // Sjekk om elementet er klikket før
-      if (this.seenClickElem.has(el)) {
+      if (this.seenElem.has(el)) {
         continue;
       }
       
-      // LØSNING: Fjern 'as HTMLElement' for å unngå SyntaxError
       const element = el; 
 
-      // 1. Sjekk synlighet (offsetParent !== null betyr at elementet er i layouten)
       if (element.offsetParent !== null && element.offsetWidth > 10 && element.offsetHeight > 10) {
         
         const text = element.textContent ? element.textContent.trim() : '';
         const ariaLabel = element.getAttribute('aria-label') || '';
         
-        // 2. Sjekk om teksten matcher et "last inn mer"-mønster
         if (textPatterns.test(text) || textPatterns.test(ariaLabel)) {
           console.log(`[AutoScroll] Klikket på "Load More" knapp: ${text.substring(0, 30)}`);
           element.click();
-          this.seenClickElem.add(element); // Marker som klikket
-          // Vi klikker KUN én knapp per sjekk for å unngå race conditions
+          this.seenElem.add(element); // Marker som klikket
           return true; 
         }
       }
     }
     
-    return false; // Ingen knapp klikket
+    return false;
   }
 
   async* run(ctx) {
@@ -130,15 +200,15 @@ class AutoScrollBehavior
     };
 
     // --------------------------
-    // 📌 KONFIGURASJON FOR STABIL SCROLLING OG KLIKK
+    // 📌 KONFIGURASJON
     // --------------------------
     const cfg = {
-      waitMs: 750,           // Ventetid mellom scroll-steg
-      scrollStep: 150,       // Scroll 150px ned per puls
-      stableLimit: 25,       // Antall runder uten vekst før stopp
-      bottomHoldExtra: 2000, // Ekstra ventetid når bunnen er nådd (gir tid til å laste inn)
-      growthEps: 1,          // Minimum vekst i piksler for å nullstille teller
-      clickDelayMs: 500      // Ventetid etter et klikk før fortsettelse
+      waitMs: 400,           
+      scrollStep: 400,       
+      stableLimit: 25,       
+      bottomHoldExtra: 2000, 
+      growthEps: 1,          
+      clickDelayMs: 500      
     };
     // --------------------------
 
@@ -153,7 +223,6 @@ class AutoScrollBehavior
     let pulses = 0;
     
     while (stableRounds < cfg.stableLimit) {
-      // 👇 Smooth incremental scroll:
       window.scrollBy(0, cfg.scrollStep);
 
       yield makeState("autoscroll: pulse", { pulses });
@@ -164,14 +233,31 @@ class AutoScrollBehavior
       const atBottom = (window.innerHeight + window.scrollY) >= (docHeight() - 2);
       
       if (atBottom) {
-        // 1. Prøv å klikke på en "Last inn mer"-knapp
-        const clicked = this.autoClickLoadMore();
+        let actionTaken = false;
         
-        // 2. Vent ekstra tid uansett (for treig innlasting)
+        // 1. Prioriter: Prøv å klikke på en "Last inn mer"-knapp
+        if (this.autoClickLoadMore()) {
+            actionTaken = true;
+        }
+        
+        // 2. Utforsk: Klikk et par same-origin lenker
+        let linksExplored = 0;
+        let elem: HTMLElement | null;
+        
+        // Utforsk maks 5 lenker per puls ved bunnen
+        const maxLinksToExplore = 5; 
+        
+        while ((elem = this.nextSameOriginLink('a')) && linksExplored < maxLinksToExplore) {
+            await this.processElem(elem, sleep);
+            linksExplored++;
+            actionTaken = true;
+        }
+        
+        // 3. Vent ekstra tid uansett
         await sleep(cfg.bottomHoldExtra);
 
-        // 3. Hvis vi klikket, vent litt ekstra for at siden skal reagere
-        if (clicked) {
+        // 4. Hvis en handling ble utført (klikk/utforsk), vent ekstra før vektsjekk
+        if (actionTaken) {
              await sleep(cfg.clickDelayMs);
         }
       }
@@ -179,7 +265,7 @@ class AutoScrollBehavior
       const h = docHeight();
       const grew = (h - lastHeight) > cfg.growthEps;
       
-      // Hvis siden vokste ELLER vi akkurat klikket på en knapp, nullstill telleren
+      // Hvis siden vokste, nullstill telleren
       if (grew) stableRounds = 0;
       else      stableRounds++;
       
