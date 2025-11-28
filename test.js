@@ -1,6 +1,6 @@
 class AutoScrollBehavior
 {
-  static id = "AutoScroll: infinite scroll (Bx Safe, Standard Status)";
+  static id = "AutoScroll: infinite scroll (Bx Safe, Robust Status)";
   static isMatch() {
     try { return /^https?:/.test(window.location.href); }
     catch { return false; }
@@ -60,8 +60,11 @@ class AutoScrollBehavior
 
   async* run(ctx) {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    
+    // makeState forenklet for å kun sende et status-objekt til Browsertrix-kjernen.
     const makeState = (state, data) => {
-      const payload = { state, data };
+      // Browsertrix lytter ofte til 'status' i data-objektet.
+      const payload = { state, data: { status: "loading", ...data } }; 
       if (ctx?.Lib?.getState) return ctx.Lib.getState(payload);
       if (ctx?.getState)      return ctx.getState(payload);
       return payload; 
@@ -71,10 +74,10 @@ class AutoScrollBehavior
     // 📌 KONFIGURASJON: VELDIG RASK & JEVN SCROLL
     // --------------------------
     const cfg = {
-      waitMs: 500,            // Redusert ventetid = Jevn og rask bevegelse
-      scrollStep: 600,       // Stort steg = Rask fremdrift
-      stableLimit: 60,       // Antall pulser uten vekst før stopp
-      bottomHoldExtra: 5000, // Lang ventetid ved bunn
+      waitMs: 500,            
+      scrollStep: 600,       
+      stableLimit: 60,       
+      bottomHoldExtra: 5000, 
       growthEps: 1,          
       clickDelayMs: 500      
     };
@@ -91,19 +94,15 @@ class AutoScrollBehavior
     let pulses = 0;
     
     while (stableRounds < cfg.stableLimit) {
-      // VIKTIG ENDRING: Bruker standard 'status: loading'
-      const stateData = { 
-          pulses, 
-          status: "loading" // Forteller Browsertrix: "Ikke klikk, jeg laster innhold"
-      };
-
-      // Første yield med status: loading før scroll
-      yield makeState("autoscroll: status", stateData); 
+      // VIKTIG ENDRING: makeState er nå den som legger til 'status: loading'
+      // Dette tvinger Browsertrix til å vente på at "lastingen" skal fullføres.
+      
+      yield makeState("autoscroll: pulse", { pulses, stableRounds }); 
 
       window.scrollBy(0, cfg.scrollStep);
 
-      // Andre yield med status: loading etter scroll/før sleep
-      yield makeState("autoscroll: pulse", stateData);
+      // Ikke nødvendig med et ekstra yield her, men beholdt for å markere progresjon
+      // yield makeState("autoscroll: progress", { pulses, stableRounds }); 
       pulses++;
 
       await sleep(cfg.waitMs);
@@ -123,7 +122,11 @@ class AutoScrollBehavior
       lastHeight = h;
     }
 
-    // Sender ferdig-signal, fjerner "loading" statusen
-    yield makeState("autoscroll: finished", { pulses, stableRounds, status: "finished" });
+    // Sender ferdig-signal UTEN 'status: loading' i data-objektet
+    const finishedState = { pulses, stableRounds, status: "finished" };
+    if (ctx?.Lib?.getState) return ctx.Lib.getState({ state: "autoscroll: finished", data: finishedState });
+    if (ctx?.getState)      return ctx.getState({ state: "autoscroll: finished", data: finishedState });
+    
+    yield finishedState;
   }
 }
