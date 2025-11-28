@@ -73,7 +73,7 @@ class AutoScrollBehavior
     const cfg = {
       waitMs: 500,            // Redusert ventetid = Jevn og rask bevegelse (fra 2500)
       scrollStep: 600,       // Stort steg = Rask fremdrift (fra 300)
-      stableLimit: 30,       
+      stableLimit: 5,       
       bottomHoldExtra: 5000, 
       growthEps: 1,          
       clickDelayMs: 500      
