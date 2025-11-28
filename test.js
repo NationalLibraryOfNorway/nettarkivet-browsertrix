@@ -1,126 +1,109 @@
 class ScrollAndClick {
   static id = "Scroll and Click";
-  static maxScrolls = 500; // standard maksimalt antall scroll-iterasjoner (brukes ikke i ny logikk)
+  static maxScrolls = 500; 
   selectors = [
-    "a",
-    "button",
-    "button.lc-load-more",
-    "span[role=treeitem]",
-    "button#load-more-posts",
-    "#pagenation"
+    "a", "button", "button.lc-load-more", "span[role=treeitem]", 
+    "button#load-more-posts", "#pagenation"
   ];
   triggerwords = [
-    "se mere",
-    "åbn",
-    "flere kommentarer",
-    "se flere",
-    "indlæs flere nyheder",
-    "hent flere",
-    "vis flere"
+    "se mere", "åbn", "flere kommentarer", "se flere", 
+    "indlæs flere nyheder", "hent flere", "vis flere"
   ].map(t => t.toLowerCase());
 
   static isMatch(url) {
-    return true; // kjører på alle sider
+    return true; 
   }
 
   static init() {
     return {};
   }
 
+  /**
+   * Henter lenker fra siden og logger dem før de legges til Browsertrix-køen.
+   */
   async extractBrowserLinks(ctx) {
-    const urls = new Set(Array.from(document.links, a => a.href).filter(Boolean));
-    await Promise.allSettled(Array.from(urls, url => ctx.Lib.addLink(url)));
+    const allUrls = Array.from(document.links, a => a.href).filter(Boolean);
+    const uniqueUrls = new Set(allUrls);
+    let addedCount = 0;
+    
+    await Promise.allSettled(Array.from(uniqueUrls, url => {
+        // Logging av URL før den legges til køen
+        ctx.log({ msg: "Link extracted", url: url, level: "info" });
+        addedCount++;
+        return ctx.Lib.addLink(url);
+    }));
+
+    if (addedCount > 0) {
+        ctx.log({ msg: `Successfully extracted and added ${addedCount} unique links.`, level: "debug" });
+    }
   }
 
   static runInIframes = false;
 
 // ----------------------------------------------------
-// CONSENT OG SCROLL FIX METODER (FRA NY LOGIKK)
+// CONSENT OG SCROLL FIX METODER
 // ----------------------------------------------------
 
   removeConsentOverlay(ctx) {
     try {
-      // Fjern SourcePoint/consent iframes
       const consentIframes = document.querySelectorAll('iframe[src*="sp.api.no"], iframe[src*="sourcepoint"], iframe[src*="consent"]');
       let iframeCount = 0;
-      consentIframes.forEach(iframe => {
-        iframe.remove();
-        iframeCount++;
-      });
+      consentIframes.forEach(iframe => { iframe.remove(); iframeCount++; });
        
-      // Fjern overlays (inkludert høy z-index og sp_message)
       const overlays = document.querySelectorAll('[id*="sp_message"], [class*="sp_message"], div[style*="z-index: 2147483647"]');
       let overlayCount = 0;
-      overlays.forEach(el => {
-        el.remove();
-        overlayCount++;
-      });
+      overlays.forEach(el => { el.remove(); overlayCount++; });
       
-      // Gjenoppretter scrolling (Fullt sett)
       document.body.style.overflow = 'auto';
       document.body.style.position = 'static';
       document.documentElement.style.overflow = 'auto';
       document.documentElement.style.position = 'static';
 
       if (iframeCount > 0 || overlayCount > 0) {
-        ctx.log({ 
-          msg: `Consent: Fjernet ${iframeCount} iframes og ${overlayCount} overlays. Scrolling gjenopprettet.`, 
-          level: "warning" 
-        });
+        ctx.log({ msg: `Consent: Fjernet ${iframeCount} iframes og ${overlayCount} overlays. Scrolling gjenopprettet.`, level: "warning" });
       }
-
     } catch (e) {
       ctx.log({ msg: `Consent: Feil under fjerning av overlay: ${e.message}`, level: "error" });
     }
   }
     
-  fixScroll(ctx) {
-    try {
-      // Fjern inline styles
-      document.body.removeAttribute('style');
-      document.documentElement.removeAttribute('style');
-      
-      // Sett riktige properties
-      document.body.style.setProperty('overflow', 'auto', 'important');
-      document.body.style.setProperty('position', 'static', 'important');
-      document.body.style.setProperty('height', 'auto', 'important');
-      document.body.style.setProperty('width', 'auto', 'important');
-      document.documentElement.style.setProperty('overflow', 'auto', 'important');
-      
-      // Legg til style tag
-      if (!document.getElementById('force-scroll-fix')) {
-        const style = document.createElement('style');
-        style.id = 'force-scroll-fix';
-        style.textContent = `
-          body, html {
-            overflow: auto !important;
-            position: static !important;
-            height: auto !important;
-            width: auto !important;
-          }
-        `;
-        document.head.appendChild(style);
-      }
-      ctx.log({ msg: "Scroll fix påsatt.", level: "debug" });
-    } catch (e) {
-      ctx.log({ msg: `Scroll fix error: ${e.message}`, level: "debug" });
-    }
-  }
+  fixScroll(ctx) {
+    try {
+      document.body.removeAttribute('style');
+      document.documentElement.removeAttribute('style');
+      document.body.style.setProperty('overflow', 'auto', 'important');
+      document.body.style.setProperty('position', 'static', 'important');
+      document.body.style.setProperty('height', 'auto', 'important');
+      document.body.style.setProperty('width', 'auto', 'important');
+      document.documentElement.style.setProperty('overflow', 'auto', 'important');
+      
+      if (!document.getElementById('force-scroll-fix')) {
+        const style = document.createElement('style');
+        style.id = 'force-scroll-fix';
+        style.textContent = `
+          body, html {
+            overflow: auto !important;
+            position: static !important;
+            height: auto !important;
+            width: auto !important;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+      ctx.log({ msg: "Scroll fix påsatt.", level: "debug" });
+    } catch (e) {
+      ctx.log({ msg: `Scroll fix error: ${e.message}`, level: "debug" });
+    }
+  }
 
-
-  /**
-   * Browsertrix-standard oppstartsmetode.
-   */
   async awaitPageLoad(ctx) {
-    // Kjører consent-fjerning og scroll-fikser
     this.removeConsentOverlay(ctx);
-    this.fixScroll(ctx); // Legg til fixScroll her
-    // Bruker ctx.Lib.sleep som forventet i Browsertrix
-    await ctx.Lib.sleep(1000);  // Litt lengre ventetid for å la siden stabilisere seg
+    this.fixScroll(ctx);
+    await ctx.Lib.sleep(1000); 
   }
 
 // ----------------------------------------------------
-// RUN-metoden (NY SCROLL & KLIKK SLØYFE)
+// RUN-metoden (HOVEDSLØYFE)
 // ----------------------------------------------------
 
   async* run(ctx) {
@@ -130,12 +113,11 @@ class ScrollAndClick {
         document.body?.scrollHeight || 0
       );
     
-    // Konfigurasjon for Scroll/Stabilitet
     const cfg = {
       waitMs: 900,
-      stableLimit: 10,       // Antall runder uten vekst før stopp
-      bottomHoldExtra: 1500, // Ekstra ventetid når vi når bunnen
-      growthEps: 8           // Minimum vekst i px for å regnes som vekst
+      stableLimit: 10,
+      bottomHoldExtra: 1500,
+      growthEps: 8
     };
     
     let click = 0;
@@ -143,9 +125,9 @@ class ScrollAndClick {
     let stableRounds = 0;
     let pulses = 0;
 
-    ctx.log({ msg: "Starting combined Scroll and Click loop" });
+    ctx.log({ msg: "Starting combined Scroll and Click loop" });
 
-    while (stableRounds < cfg.stableLimit && pulses < 100) { // Begrens pulser til 100 for sikkerhet
+    while (stableRounds < cfg.stableLimit && pulses < 100) {
         
         // 1. SCROLL
         const targetY = docHeight() - (window.innerHeight || 800);
@@ -153,7 +135,6 @@ class ScrollAndClick {
         yield ctx.Lib.getState({ state: "autoscroll: pulse", data: { pulses, stableRounds } });
         pulses++;
 
-        // Vent etter scroll
         await ctx.Lib.sleep(cfg.waitMs); 
         
         // 2. KLIKK LOGIKK
@@ -165,7 +146,7 @@ class ScrollAndClick {
           const txt = (elem.innerText || elem.textContent || "").toLowerCase().trim();
           if (this.triggerwords.some(w => w === txt)) {
             elem.click();
-            await ctx.Lib.sleep(200); // Kort pause etter klikk for å trigge lasting
+            await ctx.Lib.sleep(200);
             click++;
             clicksThisRound++;
           }
@@ -185,12 +166,12 @@ class ScrollAndClick {
         const grew = (h - lastHeight) > cfg.growthEps;
         
         if (grew) stableRounds = 0;
-        else      stableRounds++;
+        else stableRounds++;
         
         lastHeight = h;
         
-        await this.extractBrowserLinks(ctx); // Legg til lenker i hver runde
-
+        await this.extractBrowserLinks(ctx); // <--- Kaller nå den oppdaterte funksjonen
+        
         if (pulses >= 100) {
             ctx.log({ msg: `Max pulses (${pulses}) reached. Stopping scroll.`, level: "warning" });
             break;
