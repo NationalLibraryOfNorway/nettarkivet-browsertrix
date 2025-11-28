@@ -78,10 +78,10 @@ class AutoScrollBehavior
     // --------------------------
     const cfg = {
       waitMs: 500,           // scroll hvert 250 ms
-      scrollStep: 150,       // scroll 150px ned per puls
+      scrollStep: 300,       // scroll 150px ned per puls
       stableLimit: 25,
       bottomHoldExtra: 1500,
-      growthEps: 10
+      growthEps: 1
     };
     // --------------------------
 
