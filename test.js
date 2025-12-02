@@ -22,7 +22,6 @@ class ScrollAndClick {
 
   static runInIframes = false;
 
-<<<<<<< HEAD
   // Samle og rapporter lenker direkte til Browsertrix
   async collectLinks(ctx) {
     try {
@@ -44,56 +43,6 @@ class ScrollAndClick {
           state: "link-discovered", 
           data: { url: link } 
         });
-=======
-  // Riktig metode for å legge URL i køen i Browsertrix
-  queueUrl(url, ctx) {
-    try {
-      const cleanUrl = url.split("#")[0];
-      
-      // I Browsertrix behaviors bruker vi self.__bx_behaviors.addLink
-      // eller ctx.Lib kan ha en metode for dette
-      if (typeof self !== 'undefined' && self.__bx_behaviors && self.__bx_behaviors.addLink) {
-        self.__bx_behaviors.addLink(cleanUrl);
-      } else if (ctx?.Lib?.addLink) {
-        ctx.Lib.addLink(cleanUrl);
-      } else {
-        // Prøv global addLink
-        if (typeof addLink === 'function') {
-          addLink(cleanUrl);
-        }
-      }
-    } catch (e) {
-      // Silent fail - ikke stopp behavior ved feil
-    }
-  }
-
-  async extractAndQueueLinks(ctx) {
-    const currentOrigin = location.origin;
-
-    // Henter alle <a href=""> på siden
-    const allLinks = Array.from(document.querySelectorAll("a[href]"))
-      .map(a => a.href)
-      .filter(href => href && href.length > 0);
-
-    const uniqueLinks = [...new Set(allLinks)];
-
-    let queuedCount = 0;
-    let externalCount = 0;
-
-    for (const url of uniqueLinks) {
-      // Hopp over mailto:, tel:, javascript: osv.
-      if (!url.startsWith("http")) {
-        continue;
-      }
-
-      // Kun interne lenker (same origin) – du kan endre til same domain hvis du vil ha subdomener også
-      if (url.startsWith(currentOrigin)) {
-        this.queueUrl(url, ctx);
-        queuedCount++;
-      } else {
-        externalCount++;
-        ctx.log({ msg: "Ekstern lenke hoppet over", url, level: "debug" });
->>>>>>> 9932dd36ca6af8ff07d0c840f168db992bb905f2
       }
       
       ctx.log({ msg: `Samlet ${uniqueLinks.length} lenker` });
@@ -241,8 +190,4 @@ class ScrollAndClick {
       }
     });
   }
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 9932dd36ca6af8ff07d0c840f168db992bb905f2
