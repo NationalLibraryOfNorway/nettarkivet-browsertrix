@@ -22,6 +22,29 @@ class ScrollAndClick {
 
   static runInIframes = false;
 
+<<<<<<< HEAD
+  // Samle og rapporter lenker direkte til Browsertrix
+  async collectLinks(ctx) {
+    try {
+      const links = Array.from(document.querySelectorAll("a[href]"))
+        .map(a => {
+          try {
+            return new URL(a.href, location.href).href;
+          } catch {
+            return null;
+          }
+        })
+        .filter(href => href && href.startsWith("http"));
+      
+      const uniqueLinks = [...new Set(links)];
+      
+      // Yield hver lenke som "discovered link" state
+      for (const link of uniqueLinks) {
+        yield ctx.Lib.getState({ 
+          state: "link-discovered", 
+          data: { url: link } 
+        });
+=======
   // Riktig metode for å legge URL i køen i Browsertrix
   queueUrl(url, ctx) {
     try {
@@ -70,29 +93,67 @@ class ScrollAndClick {
       } else {
         externalCount++;
         ctx.log({ msg: "Ekstern lenke hoppet over", url, level: "debug" });
+>>>>>>> 9932dd36ca6af8ff07d0c840f168db992bb905f2
       }
+      
+      ctx.log({ msg: `Samlet ${uniqueLinks.length} lenker` });
+    } catch (e) {
+      ctx.log({ msg: `Feil ved lenkesamling: ${e.message}` });
     }
-
-    ctx.log({
-      msg: `Lenke-kø: ${queuedCount} interne lenker lagt i køen, ${externalCount} eksterne ignorert`,
-      level: "info"
-    });
   }
 
   // ----------------------------------------------------
-  // CONSENT OG SCROLL FIX (uendret)
+  // CONSENT OG SCROLL FIX
   // ----------------------------------------------------
-  removeConsentOverlay(ctx) {
-    // ... (din eksisterende kode – beholdes uendret)
+  removeConsentOverlay() {
+    try {
+      // Fjern SourcePoint/consent iframes
+      const consentIframes = document.querySelectorAll('iframe[src*="sp.api.no"], iframe[src*="sourcepoint"], iframe[src*="consent"]');
+      consentIframes.forEach(iframe => iframe.remove());
+      
+      // Fjern overlays
+      const overlays = document.querySelectorAll('[id*="sp_message"], [class*="sp_message"], div[style*="z-index: 2147483647"]');
+      overlays.forEach(el => el.remove());
+    } catch (e) {
+      console.debug('Overlay removal error:', e);
     }
+  }
 
-  fixScroll(ctx) {
-    // ... (din eksisterende kode – beholdes uendret)
+  fixScroll() {
+    try {
+      // Fjern inline styles
+      document.body.removeAttribute('style');
+      document.documentElement.removeAttribute('style');
+      
+      // Sett riktige properties
+      document.body.style.setProperty('overflow', 'auto', 'important');
+      document.body.style.setProperty('position', 'static', 'important');
+      document.body.style.setProperty('height', 'auto', 'important');
+      document.body.style.setProperty('width', 'auto', 'important');
+      document.documentElement.style.setProperty('overflow', 'auto', 'important');
+      
+      // Legg til style tag
+      if (!document.getElementById('force-scroll-fix')) {
+        const style = document.createElement('style');
+        style.id = 'force-scroll-fix';
+        style.textContent = `
+          body, html {
+            overflow: auto !important;
+            position: static !important;
+            height: auto !important;
+            width: auto !important;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+    } catch (e) {
+      console.debug('Scroll fix error:', e);
+    }
   }
 
   async awaitPageLoad(ctx) {
-    this.removeConsentOverlay(ctx);
-    this.fixScroll(ctx);
+    this.removeConsentOverlay();
+    this.fixScroll();
     await ctx.Lib.sleep(1000);
   }
 
@@ -150,10 +211,7 @@ class ScrollAndClick {
         ctx.log({ msg: `Klikket ${clicksThisRound} "vis flere"-knapper (totalt ${click})` });
       }
 
-      // 3. Legg alle nye interne lenker i køen (kjøres hver runde)
-      await this.extractAndQueueLinks(ctx);
-
-      // 4. Sjekk om siden har sluttet å vokse
+      // 3. Sjekk om siden har sluttet å vokse
       const h = docHeight();
       if (h - lastHeight > cfg.growthEps) {
         stableRounds = 0;
@@ -168,10 +226,11 @@ class ScrollAndClick {
       }
     }
 
-    // Avslutt – en siste runde med kø-legging
-    await this.extractAndQueueLinks(ctx);
-
     window.scrollTo(0, docHeight());
+    
+    // Samle alle lenker FØR vi signaliserer at vi er ferdig
+    ctx.log({ msg: "Samler alle lenker på siden..." });
+    yield* this.collectLinks(ctx);
 
     yield ctx.Lib.getState({
       state: "finished",
@@ -182,4 +241,8 @@ class ScrollAndClick {
       }
     });
   }
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> 9932dd36ca6af8ff07d0c840f168db992bb905f2
