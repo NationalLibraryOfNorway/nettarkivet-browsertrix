@@ -135,14 +135,25 @@ class ScrollAndClick {
 
       // 2b. Klikk på lenker som åpner lightbox/modal
       if (pulses % 3 === 0) {
-        const links = document.querySelectorAll('a[href]');
-        let clickedLinks = 0;
-        const maxClicksPerRound = 3;
+        const allLinks = document.querySelectorAll('a[href]');
+        ctx.log({ msg: `Fant ${allLinks.length} totale lenker på siden` });
         
-        for (const link of links) {
-          if (clickedLinks >= maxClicksPerRound) break;
+        let clickedLinks = 0;
+        const maxClicksPerRound = 5;
+        
+        for (const link of allLinks) {
+          if (clickedLinks >= maxClicksPerRound) {
+            ctx.log({ msg: `Nådde maks ${maxClicksPerRound} klikk per runde` });
+            break;
+          }
           
           const href = link.href;
+          
+          // Debug: logg lenke-info
+          if (clickedLinks === 0) {
+            ctx.log({ msg: `Sjekker lenke: href="${href}", starts with http: ${href?.startsWith('http')}, already visited: ${this.visitedLinks.has(href)}` });
+          }
+          
           if (!href || !href.startsWith('http')) continue;
           if (this.visitedLinks.has(href)) continue;
           
@@ -157,7 +168,7 @@ class ScrollAndClick {
             link.click();
             clickedLinks++;
             
-            ctx.log({ msg: `Klikket lenke: ${href}` });
+            ctx.log({ msg: `✓ Klikket lenke #${clickedLinks}: ${href}` });
             
             // Vent litt for å la lightbox/modal laste
             await ctx.Lib.sleep(1500);
@@ -173,6 +184,7 @@ class ScrollAndClick {
               const closeBtn = document.querySelector(selector);
               if (closeBtn && closeBtn.offsetParent !== null) {
                 closeBtn.click();
+                ctx.log({ msg: `Lukket lightbox med selector: ${selector}` });
                 await ctx.Lib.sleep(300);
                 break;
               }
@@ -187,9 +199,7 @@ class ScrollAndClick {
           }
         }
         
-        if (clickedLinks > 0) {
-          ctx.log({ msg: `Åpnet ${clickedLinks} lightboxer (totalt ${this.visitedLinks.size} lenker besøkt)` });
-        }
+        ctx.log({ msg: `Runde ${pulses}: Åpnet ${clickedLinks} lightboxer av ${allLinks.length} lenker (totalt ${this.visitedLinks.size} unike besøkt)` });
       }
 
       // 3. Sjekk om siden har sluttet å vokse
