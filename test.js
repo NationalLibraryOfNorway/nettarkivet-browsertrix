@@ -76,7 +76,7 @@ class ScrollAndClick {
   async awaitPageLoad(ctx) {
     this.removeConsentOverlay();
     this.fixScroll();
-    await ctx.Lib.sleep(1000);
+    await ctx.Lib.sleep(500);
   }
 
   // ----------------------------------------------------
@@ -93,7 +93,7 @@ class ScrollAndClick {
 
     const cfg = {
       waitMs: 900,
-      stableLimit: 12,
+      stableLimit: 6,
       bottomHoldExtra: 1500,
       growthEps: 10
     };
@@ -152,7 +152,7 @@ class ScrollAndClick {
     // Scroll tilbake til toppen
     ctx.log({ msg: "Scroller tilbake til toppen" });
     window.scrollTo(0, 0);
-    await ctx.Lib.sleep(1000);
+    await ctx.Lib.sleep(500);
 
     // Klikk på alle lenker
     const allLinks = document.querySelectorAll('a[href]');
@@ -222,7 +222,7 @@ class ScrollAndClick {
             ctx.log({ msg: `Lukker med selector: ${selector}` });
             closeBtn.click();
             closed = true;
-            await ctx.Lib.sleep(500);
+            await ctx.Lib.sleep(250);
             break;
           }
         }
@@ -231,7 +231,7 @@ class ScrollAndClick {
           // Fallback: ESC-tast
           ctx.log({ msg: "Prøver ESC-tast" });
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-          await ctx.Lib.sleep(500);
+          await ctx.Lib.sleep(250);
         }
 
       } catch (e) {
