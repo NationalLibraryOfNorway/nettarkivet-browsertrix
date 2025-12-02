@@ -103,24 +103,24 @@ class ScrollAndClick {
     let stableRounds = 0;
     let pulses = 0;
 
-    ctx.log({ msg: "Starter Scroll & Click + Queue behavior" });
+    ctx.log({ msg: "Starter Scroll & Click behavior" });
 
-    while (stableRounds < cfg.stableLimit && pulses < 150) {
-      // 1. Scroll til nesten bunnen
+    // Scroll sakte nedover
+    while (stableRounds < cfg.stableLimit && pulses < 50) {
       const targetY = docHeight() - (window.innerHeight || 800);
       window.scrollTo(0, targetY > 0 ? targetY : 0);
 
-      yield ctx.Lib.getState({ state: "autoscroll", data: { pulses, stableRounds } });
+      yield ctx.Lib.getState({ state: "scrolling", data: { pulses, stableRounds } });
       pulses++;
       await ctx.Lib.sleep(cfg.waitMs);
 
-      // 2. Klikk på "vis flere"-knapper
+      // Klikk på "vis flere"-knapper
       const elems = document.querySelectorAll(this.selectors.join(","));
       let clicksThisRound = 0;
 
       for (const elem of elems) {
         const txt = (elem.innerText || elem.textContent || "").toLowerCase().trim();
-        if (this.triggerwords.some(w => txt.includes(w))) {  // includes er ofte bedre enn ===
+        if (this.triggerwords.some(w => txt.includes(w))) {
           elem.scrollIntoView({ block: "center" });
           elem.click();
           clicksThisRound++;
@@ -133,107 +133,114 @@ class ScrollAndClick {
         ctx.log({ msg: `Klikket ${clicksThisRound} "vis flere"-knapper (totalt ${click})` });
       }
 
-      // 2b. Klikk på lenker som åpner lightbox/modal - kjør etter scrolling er ferdig
-      if (stableRounds >= cfg.stableLimit || pulses >= 150) {
-        // Scroll til toppen før vi begynner å klikke
-        window.scrollTo(0, 0);
-        await ctx.Lib.sleep(1000);
-        
-        const allLinks = document.querySelectorAll('a[href]');
-        ctx.log({ msg: `Fant ${allLinks.length} totale lenker på siden, starter klikking` });
-        
-        let clickedLinks = 0;
-        
-        for (const link of allLinks) {
-          const href = link.href;
-          
-          // Debug første lenke
-          if (clickedLinks === 0) {
-            ctx.log({ msg: `Første lenke: href="${href}", pathname="${link.pathname}", matcher prefix: ${link.pathname?.startsWith('/vis/personalia/greetings/all')}` });
-          }
-          
-          // Filtrer - kun lenker under /vis/personalia/greetings/all
-          if (!href || !href.startsWith('http')) continue;
-          if (!link.pathname?.startsWith('/vis/personalia/greetings/all')) continue;
-          if (this.visitedLinks.has(href)) continue;
-          
-          this.visitedLinks.add(href);
-          
-          try {
-            // Scroll lenken inn i viewport
-            link.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            await ctx.Lib.sleep(300);
-            
-            // Klikk med preventDefault for å unngå navigering
-            const clickEvent = new MouseEvent('click', {
-              bubbles: true,
-              cancelable: true,
-              view: window
-            });
-            
-            const preventNav = (e) => {
-              e.preventDefault();
-            };
-            link.addEventListener('click', preventNav, { once: false });
-            link.dispatchEvent(clickEvent);
-            
-            clickedLinks++;
-            ctx.log({ msg: `Klikket lenke #${clickedLinks}: ${href}` });
-            
-            // Vent på lightbox
-            await ctx.Lib.sleep(2000);
-            
-            // Prøv å lukke lightbox/modal
-            const closeSelectors = [
-              'button[aria-label="Lukk"]', '[aria-label="Lukk"]',
-              'button[aria-label*="close"]', 'button[aria-label*="Close"]',
-              '.close', '[class*="close"]', '[aria-label*="close"]', '[aria-label*="Close"]',
-              '.modal-close', '.lightbox-close', 'button[title*="close"]', 'button[title*="Close"]',
-              '[class*="overlay"]', '.backdrop', '[data-dismiss]', 'button.btn-close',
-              '[onclick*="close"]', 'a[onclick*="close"]'
-            ];
-            
-            let closed = false;
-            for (const selector of closeSelectors) {
-              const closeBtn = document.querySelector(selector);
-              if (closeBtn && closeBtn.offsetParent !== null) {
-                closeBtn.click();
-                ctx.log({ msg: `Lukket lightbox med: ${selector}` });
-                closed = true;
-                await ctx.Lib.sleep(500);
-                break;
-              }
-            }
-            
-            if (!closed) {
-              // Fallback: ESC-tast
-              document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-              await ctx.Lib.sleep(500);
-            }
-            
-          } catch (e) {
-            ctx.log({ msg: `Feil ved klikk på lenke: ${e.message}` });
-          }
-        }
-        
-        ctx.log({ msg: `Klikking ferdig! ${clickedLinks} lenker klikket av ${allLinks.length} totalt (${this.visitedLinks.size} unike)` });
-        break; // Avslutt while-løkken
-      }
-
-      // 3. Sjekk om siden har sluttet å vokse
-      const h = docHeight();
-      if (h - lastHeight > cfg.growthEps) {
-        stableRounds = 0;
-        lastHeight = h;
-      } else {
+      // Sjekk om siden har sluttet å vokse
+      const currentHeight = docHeight();
+      if (Math.abs(currentHeight - lastHeight) < cfg.growthEps) {
         stableRounds++;
+      } else {
+        stableRounds = 0;
       }
+      lastHeight = currentHeight;
 
-      // Ekstra ventetid når vi er på bunnen
-      if ((window.innerHeight + window.scrollY) >= (docHeight() - 10)) {
-        await ctx.Lib.sleep(cfg.bottomHoldExtra);
+      if (pulses % 5 === 0) {
+        ctx.log({ msg: `Pulse ${pulses}, height: ${currentHeight}, stable: ${stableRounds}` });
       }
     }
+
+    ctx.log({ msg: `Scrolling ferdig etter ${pulses} pulses` });
+    
+    // Scroll tilbake til toppen
+    ctx.log({ msg: "Scroller tilbake til toppen" });
+    window.scrollTo(0, 0);
+    await ctx.Lib.sleep(1000);
+
+    // Klikk på alle lenker
+    const allLinks = document.querySelectorAll('a[href]');
+    ctx.log({ msg: `Fant ${allLinks.length} totale lenker på siden` });
+
+    let clickedCount = 0;
+
+    for (const link of allLinks) {
+      const href = link.href;
+
+      // Debug første lenke
+      if (clickedCount === 0) {
+        ctx.log({ msg: `Første lenke: href="${href}", pathname="${link.pathname}", matcher prefix: ${link.pathname?.startsWith('/vis/personalia/greetings/all')}` });
+      }
+
+      // Filtrer - kun lenker under /vis/personalia/greetings/all
+      if (!href || !href.startsWith('http')) continue;
+      if (!link.pathname?.startsWith('/vis/personalia/greetings/all')) continue;
+      if (this.visitedLinks.has(href)) continue;
+
+      this.visitedLinks.add(href);
+
+      try {
+        // Scroll inn i viewport
+        link.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        await ctx.Lib.sleep(300);
+
+        // Klikk med preventDefault for å unngå navigering
+        ctx.log({ msg: `Klikker lenke #${clickedCount + 1}: ${href}` });
+        const clickEvent = new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        });
+        
+        const preventNav = (e) => {
+          e.preventDefault();
+        };
+        link.addEventListener('click', preventNav, { once: false });
+        link.dispatchEvent(clickEvent);
+
+        clickedCount++;
+
+        // Vent på lightbox
+        await ctx.Lib.sleep(2000);
+
+        // Se etter lightbox/modal
+        const lightbox = document.querySelector('[class*="lightbox"], [class*="modal"], [class*="overlay"], [class*="popup"]');
+        if (lightbox) {
+          ctx.log({ msg: `Fant lightbox: ${lightbox.className}` });
+        }
+
+        // Prøv å lukke
+        const closeSelectors = [
+          'button[aria-label="Lukk"]', '[aria-label="Lukk"]',
+          'button[aria-label*="close"]', 'button[aria-label*="Close"]',
+          '.close', '[class*="close"]', '[aria-label*="close"]', '[aria-label*="Close"]',
+          '.modal-close', '.lightbox-close', 'button[title*="close"]', 'button[title*="Close"]',
+          '[class*="overlay"]', '.backdrop', '[data-dismiss]', 'button.btn-close',
+          '[onclick*="close"]', 'a[onclick*="close"]'
+        ];
+
+        let closed = false;
+        for (const selector of closeSelectors) {
+          const closeBtn = document.querySelector(selector);
+          if (closeBtn && closeBtn.offsetParent !== null) {
+            ctx.log({ msg: `Lukker med selector: ${selector}` });
+            closeBtn.click();
+            closed = true;
+            await ctx.Lib.sleep(500);
+            break;
+          }
+        }
+
+        if (!closed) {
+          // Fallback: ESC-tast
+          ctx.log({ msg: "Prøver ESC-tast" });
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+          await ctx.Lib.sleep(500);
+        }
+
+      } catch (e) {
+        ctx.log({ msg: `Feil ved klikk: ${e.message}` });
+      }
+    }
+
+    ctx.log({ msg: `Ferdig! Klikket ${clickedCount} lenker av ${allLinks.length} totalt` });
+    ctx.log({ msg: `Unike lenker besøkt: ${this.visitedLinks.size}` });
 
     window.scrollTo(0, docHeight());
 
