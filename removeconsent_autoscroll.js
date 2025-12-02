@@ -1,23 +1,32 @@
-class AutoScrollBehavior
-{
-  static id = "AutoScroll: simple infinite scroll";
-  static isMatch() {
-    try { return /^https?:/.test(window.location.href); }
-    catch { return false; }
+class ScrollAndClick {
+  static id = "Scroll and Click";
+  static maxScrolls = 500;
+
+  selectors = [
+    "a", "button", "button.lc-load-more", "span[role=treeitem]",
+    "button#load-more-posts", "#pagenation"
+  ];
+
+  triggerwords = [
+    "se mere", "åbn", "flere kommentarer", "se flere",
+    "indlæs flere nyheder", "hent flere", "vis flere"
+  ].map(t => t.toLowerCase());
+
+  visitedLinks = new Set();
+
+  static isMatch(url) {
+    return true;
   }
+
   static init() {
-    return new AutoScrollBehavior();
+    return new ScrollAndClick();
   }
+
   static runInIframes = false;
-  
-  async awaitPageLoad() {
-    // Fjern consent overlay og fiks scroll
-    this.removeConsentOverlay();
-    this.fixScroll();
-    
-    await new Promise(r => setTimeout(r, 500));
-  }
-  
+
+  // ----------------------------------------------------
+  // CONSENT OG SCROLL FIX
+  // ----------------------------------------------------
   removeConsentOverlay() {
     try {
       // Fjern SourcePoint/consent iframes
@@ -31,7 +40,7 @@ class AutoScrollBehavior
       console.debug('Overlay removal error:', e);
     }
   }
-  
+
   fixScroll() {
     try {
       // Fjern inline styles
@@ -63,48 +72,150 @@ class AutoScrollBehavior
       console.debug('Scroll fix error:', e);
     }
   }
-  
+
+  async awaitPageLoad(ctx) {
+    this.removeConsentOverlay();
+    this.fixScroll();
+    await ctx.Lib.sleep(1000);
+  }
+
+  // ----------------------------------------------------
+  // HOVEDSLØYFE – nå med skikkelig kø-legging
+  // ----------------------------------------------------
   async* run(ctx) {
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    const makeState = (state, data) => {
-      const payload = { state, data };
-      if (ctx?.Lib?.getState) return ctx.Lib.getState(payload);
-      if (ctx?.getState)      return ctx.getState(payload);
-      return payload; 
-    };
-    const cfg = {
-      waitMs: 900,
-      stableLimit: 10,
-      bottomHoldExtra: 1500,
-      growthEps: 8
-    };
+    await this.awaitPageLoad(ctx);
+
     const docHeight = () =>
       Math.max(
         document.documentElement?.scrollHeight || 0,
         document.body?.scrollHeight || 0
       );
+
+    const cfg = {
+      waitMs: 900,
+      stableLimit: 12,
+      bottomHoldExtra: 1500,
+      growthEps: 10
+    };
+
+    let click = 0;
     let lastHeight = docHeight();
     let stableRounds = 0;
     let pulses = 0;
-    while (stableRounds < cfg.stableLimit) {
+
+    ctx.log({ msg: "Starter Scroll & Click + Queue behavior" });
+
+    while (stableRounds < cfg.stableLimit && pulses < 150) {
+      // 1. Scroll til nesten bunnen
       const targetY = docHeight() - (window.innerHeight || 800);
       window.scrollTo(0, targetY > 0 ? targetY : 0);
-      yield makeState("autoscroll: pulse", { pulses });
+
+      yield ctx.Lib.getState({ state: "autoscroll", data: { pulses, stableRounds } });
       pulses++;
-      await sleep(cfg.waitMs);
-      const atBottom = (window.innerHeight + window.scrollY) >= (docHeight() - 2);
-      if (atBottom) {
-        await sleep(cfg.bottomHoldExtra);
+      await ctx.Lib.sleep(cfg.waitMs);
+
+      // 2. Klikk på "vis flere"-knapper
+      const elems = document.querySelectorAll(this.selectors.join(","));
+      let clicksThisRound = 0;
+
+      for (const elem of elems) {
+        const txt = (elem.innerText || elem.textContent || "").toLowerCase().trim();
+        if (this.triggerwords.some(w => txt.includes(w))) {  // includes er ofte bedre enn ===
+          elem.scrollIntoView({ block: "center" });
+          elem.click();
+          clicksThisRound++;
+          click++;
+          await ctx.Lib.sleep(300);
+        }
       }
+
+      if (clicksThisRound > 0) {
+        ctx.log({ msg: `Klikket ${clicksThisRound} "vis flere"-knapper (totalt ${click})` });
+      }
+
+      // 2b. Klikk på lenker som åpner lightbox/modal
+      if (pulses % 3 === 0) {
+        const links = document.querySelectorAll('a[href]');
+        let clickedLinks = 0;
+        const maxClicksPerRound = 3;
+        
+        for (const link of links) {
+          if (clickedLinks >= maxClicksPerRound) break;
+          
+          const href = link.href;
+          if (!href || !href.startsWith('http')) continue;
+          if (this.visitedLinks.has(href)) continue;
+          
+          this.visitedLinks.add(href);
+          
+          try {
+            // Scroll lenken inn i viewport
+            link.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await ctx.Lib.sleep(200);
+            
+            // Klikk på lenken for å åpne lightbox
+            link.click();
+            clickedLinks++;
+            
+            ctx.log({ msg: `Klikket lenke: ${href}` });
+            
+            // Vent litt for å la lightbox/modal laste
+            await ctx.Lib.sleep(1500);
+            
+            // Prøv å lukke lightbox/modal (vanlige lukkemetoder)
+            const closeSelectors = [
+              '.close', '[class*="close"]', '[aria-label*="close"]', '[aria-label*="Close"]',
+              '.modal-close', '.lightbox-close', 'button[title*="close"]', 'button[title*="Close"]',
+              '[class*="overlay"]', '.backdrop', '[data-dismiss]'
+            ];
+            
+            for (const selector of closeSelectors) {
+              const closeBtn = document.querySelector(selector);
+              if (closeBtn && closeBtn.offsetParent !== null) {
+                closeBtn.click();
+                await ctx.Lib.sleep(300);
+                break;
+              }
+            }
+            
+            // Fallback: ESC-tast for å lukke
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27 }));
+            await ctx.Lib.sleep(300);
+            
+          } catch (e) {
+            ctx.log({ msg: `Feil ved klikk på lenke: ${e.message}` });
+          }
+        }
+        
+        if (clickedLinks > 0) {
+          ctx.log({ msg: `Åpnet ${clickedLinks} lightboxer (totalt ${this.visitedLinks.size} lenker besøkt)` });
+        }
+      }
+
+      // 3. Sjekk om siden har sluttet å vokse
       const h = docHeight();
-      const grew = (h - lastHeight) > cfg.growthEps;
-      if (grew) stableRounds = 0;
-      else      stableRounds++;
-      lastHeight = h;
+      if (h - lastHeight > cfg.growthEps) {
+        stableRounds = 0;
+        lastHeight = h;
+      } else {
+        stableRounds++;
+      }
+
+      // Ekstra ventetid når vi er på bunnen
+      if ((window.innerHeight + window.scrollY) >= (docHeight() - 10)) {
+        await ctx.Lib.sleep(cfg.bottomHoldExtra);
+      }
     }
-    try {
-      window.scrollTo(0, docHeight() - (window.innerHeight || 800));
-      yield makeState("autoscroll: finished", { pulses, stableRounds });
-    } catch {}
+
+    window.scrollTo(0, docHeight());
+
+    yield ctx.Lib.getState({
+      state: "finished",
+      data: {
+        msg: "Scroll & Click ferdig",
+        totalClicks: click,
+        totalPulses: pulses
+      }
+    });
   }
 }
