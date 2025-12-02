@@ -1,32 +1,23 @@
-class ScrollAndClick {
-  static id = "Scroll and Click";
-  static maxScrolls = 500;
-
-  selectors = [
-    "a", "button", "button.lc-load-more", "span[role=treeitem]",
-    "button#load-more-posts", "#pagenation"
-  ];
-
-  triggerwords = [
-    "se mere", "åbn", "flere kommentarer", "se flere",
-    "indlæs flere nyheder", "hent flere", "vis flere"
-  ].map(t => t.toLowerCase());
-
-  visitedLinks = new Set();
-
-  static isMatch(url) {
-    return true;
+class AutoScrollBehavior
+{
+  static id = "AutoScroll: simple infinite scroll";
+  static isMatch() {
+    try { return /^https?:/.test(window.location.href); }
+    catch { return false; }
   }
-
   static init() {
-    return new ScrollAndClick();
+    return new AutoScrollBehavior();
   }
-
   static runInIframes = false;
-
-  // ----------------------------------------------------
-  // CONSENT OG SCROLL FIX
-  // ----------------------------------------------------
+  
+  async awaitPageLoad() {
+    // Fjern consent overlay og fiks scroll
+    this.removeConsentOverlay();
+    this.fixScroll();
+    
+    await new Promise(r => setTimeout(r, 500));
+  }
+  
   removeConsentOverlay() {
     try {
       // Fjern SourcePoint/consent iframes
@@ -40,7 +31,7 @@ class ScrollAndClick {
       console.debug('Overlay removal error:', e);
     }
   }
-
+  
   fixScroll() {
     try {
       // Fjern inline styles
@@ -72,178 +63,48 @@ class ScrollAndClick {
       console.debug('Scroll fix error:', e);
     }
   }
-
-  async awaitPageLoad(ctx) {
-    this.removeConsentOverlay();
-    this.fixScroll();
-    await ctx.Lib.sleep(1000);
-  }
-
-  // ----------------------------------------------------
-  // HOVEDSLØYFE – nå med skikkelig kø-legging
-  // ----------------------------------------------------
+  
   async* run(ctx) {
-    await this.awaitPageLoad(ctx);
-
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const makeState = (state, data) => {
+      const payload = { state, data };
+      if (ctx?.Lib?.getState) return ctx.Lib.getState(payload);
+      if (ctx?.getState)      return ctx.getState(payload);
+      return payload; 
+    };
+    const cfg = {
+      waitMs: 900,
+      stableLimit: 10,
+      bottomHoldExtra: 1500,
+      growthEps: 8
+    };
     const docHeight = () =>
       Math.max(
         document.documentElement?.scrollHeight || 0,
         document.body?.scrollHeight || 0
       );
-
-    const cfg = {
-      waitMs: 900,
-      stableLimit: 12,
-      bottomHoldExtra: 1500,
-      growthEps: 10
-    };
-
-    let click = 0;
     let lastHeight = docHeight();
     let stableRounds = 0;
     let pulses = 0;
-
-    ctx.log({ msg: "Starter Scroll & Click + Queue behavior" });
-
-    while (stableRounds < cfg.stableLimit && pulses < 150) {
-      // 1. Scroll til nesten bunnen
+    while (stableRounds < cfg.stableLimit) {
       const targetY = docHeight() - (window.innerHeight || 800);
       window.scrollTo(0, targetY > 0 ? targetY : 0);
-
-      yield ctx.Lib.getState({ state: "autoscroll", data: { pulses, stableRounds } });
+      yield makeState("autoscroll: pulse", { pulses });
       pulses++;
-      await ctx.Lib.sleep(cfg.waitMs);
-
-      // 2. Klikk på "vis flere"-knapper
-      const elems = document.querySelectorAll(this.selectors.join(","));
-      let clicksThisRound = 0;
-
-      for (const elem of elems) {
-        const txt = (elem.innerText || elem.textContent || "").toLowerCase().trim();
-        if (this.triggerwords.some(w => txt.includes(w))) {  // includes er ofte bedre enn ===
-          elem.scrollIntoView({ block: "center" });
-          elem.click();
-          clicksThisRound++;
-          click++;
-          await ctx.Lib.sleep(300);
-        }
+      await sleep(cfg.waitMs);
+      const atBottom = (window.innerHeight + window.scrollY) >= (docHeight() - 2);
+      if (atBottom) {
+        await sleep(cfg.bottomHoldExtra);
       }
-
-      if (clicksThisRound > 0) {
-        ctx.log({ msg: `Klikket ${clicksThisRound} "vis flere"-knapper (totalt ${click})` });
-      }
-
-      // 2b. Klikk på lenker som åpner lightbox/modal - kjør etter scrolling er ferdig
-      if (stableRounds >= cfg.stableLimit || pulses >= 150) {
-        // Scroll til toppen før vi begynner å klikke
-        window.scrollTo(0, 0);
-        await ctx.Lib.sleep(1000);
-        
-        const allLinks = document.querySelectorAll('a[href]');
-        ctx.log({ msg: `Fant ${allLinks.length} totale lenker på siden, starter klikking` });
-        
-        let clickedLinks = 0;
-        
-        for (const link of allLinks) {
-          const href = link.href;
-          
-          // Debug første lenke
-          if (clickedLinks === 0) {
-            ctx.log({ msg: `Første lenke: href="${href}", pathname="${link.pathname}", matcher prefix: ${link.pathname?.startsWith('/vis/personalia/greetings/all')}` });
-          }
-          
-          // Filtrer - kun lenker under /vis/personalia/greetings/all
-          if (!href || !href.startsWith('http')) continue;
-          if (!link.pathname?.startsWith('/vis/personalia/greetings/all')) continue;
-          if (this.visitedLinks.has(href)) continue;
-          
-          this.visitedLinks.add(href);
-          
-          try {
-            // Scroll lenken inn i viewport
-            link.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            await ctx.Lib.sleep(300);
-            
-            // Klikk med preventDefault for å unngå navigering
-            const clickEvent = new MouseEvent('click', {
-              bubbles: true,
-              cancelable: true,
-              view: window
-            });
-            
-            const preventNav = (e) => {
-              e.preventDefault();
-            };
-            link.addEventListener('click', preventNav, { once: false });
-            link.dispatchEvent(clickEvent);
-            
-            clickedLinks++;
-            ctx.log({ msg: `Klikket lenke #${clickedLinks}: ${href}` });
-            
-            // Vent på lightbox
-            await ctx.Lib.sleep(2000);
-            
-            // Prøv å lukke lightbox/modal
-            const closeSelectors = [
-              'button[aria-label="Lukk"]', '[aria-label="Lukk"]',
-              'button[aria-label*="close"]', 'button[aria-label*="Close"]',
-              '.close', '[class*="close"]', '[aria-label*="close"]', '[aria-label*="Close"]',
-              '.modal-close', '.lightbox-close', 'button[title*="close"]', 'button[title*="Close"]',
-              '[class*="overlay"]', '.backdrop', '[data-dismiss]', 'button.btn-close',
-              '[onclick*="close"]', 'a[onclick*="close"]'
-            ];
-            
-            let closed = false;
-            for (const selector of closeSelectors) {
-              const closeBtn = document.querySelector(selector);
-              if (closeBtn && closeBtn.offsetParent !== null) {
-                closeBtn.click();
-                ctx.log({ msg: `Lukket lightbox med: ${selector}` });
-                closed = true;
-                await ctx.Lib.sleep(500);
-                break;
-              }
-            }
-            
-            if (!closed) {
-              // Fallback: ESC-tast
-              document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-              await ctx.Lib.sleep(500);
-            }
-            
-          } catch (e) {
-            ctx.log({ msg: `Feil ved klikk på lenke: ${e.message}` });
-          }
-        }
-        
-        ctx.log({ msg: `Klikking ferdig! ${clickedLinks} lenker klikket av ${allLinks.length} totalt (${this.visitedLinks.size} unike)` });
-        break; // Avslutt while-løkken
-      }
-
-      // 3. Sjekk om siden har sluttet å vokse
       const h = docHeight();
-      if (h - lastHeight > cfg.growthEps) {
-        stableRounds = 0;
-        lastHeight = h;
-      } else {
-        stableRounds++;
-      }
-
-      // Ekstra ventetid når vi er på bunnen
-      if ((window.innerHeight + window.scrollY) >= (docHeight() - 10)) {
-        await ctx.Lib.sleep(cfg.bottomHoldExtra);
-      }
+      const grew = (h - lastHeight) > cfg.growthEps;
+      if (grew) stableRounds = 0;
+      else      stableRounds++;
+      lastHeight = h;
     }
-
-    window.scrollTo(0, docHeight());
-
-    yield ctx.Lib.getState({
-      state: "finished",
-      data: {
-        msg: "Scroll & Click ferdig",
-        totalClicks: click,
-        totalPulses: pulses
-      }
-    });
+    try {
+      window.scrollTo(0, docHeight() - (window.innerHeight || 800));
+      yield makeState("autoscroll: finished", { pulses, stableRounds });
+    } catch {}
   }
 }
