@@ -76,7 +76,7 @@ class ScrollAndClick {
   async awaitPageLoad(ctx) {
     this.removeConsentOverlay();
     this.fixScroll();
-    await ctx.Lib.sleep(500);
+    await ctx.Lib.sleep(250);
   }
 
   // ----------------------------------------------------
@@ -92,9 +92,9 @@ class ScrollAndClick {
       );
 
     const cfg = {
-      waitMs: 900,
+      waitMs: 450,
       stableLimit: 6,
-      bottomHoldExtra: 1500,
+      bottomHoldExtra: 1000,
       growthEps: 10
     };
 
@@ -125,7 +125,7 @@ class ScrollAndClick {
           elem.click();
           clicksThisRound++;
           click++;
-          await ctx.Lib.sleep(300);
+          await ctx.Lib.sleep(150);
         }
       }
 
@@ -152,7 +152,7 @@ class ScrollAndClick {
     // Scroll tilbake til toppen
     ctx.log({ msg: "Scroller tilbake til toppen" });
     window.scrollTo(0, 0);
-    await ctx.Lib.sleep(500);
+    await ctx.Lib.sleep(200);
 
     // Klikk på alle lenker
     const allLinks = document.querySelectorAll('a[href]');
@@ -197,7 +197,7 @@ class ScrollAndClick {
         clickedCount++;
 
         // Vent på lightbox
-        await ctx.Lib.sleep(2000);
+        await ctx.Lib.sleep(500);
 
         // Se etter lightbox/modal
         const lightbox = document.querySelector('[class*="lightbox"], [class*="modal"], [class*="overlay"], [class*="popup"]');
