@@ -23,7 +23,7 @@ class ScrollAndClick {
   static runInIframes = false;
 
   // Samle og rapporter lenker direkte til Browsertrix
-  async collectLinks(ctx) {
+  async* collectLinks(ctx) {
     try {
       const links = Array.from(document.querySelectorAll("a[href]"))
         .map(a => {
