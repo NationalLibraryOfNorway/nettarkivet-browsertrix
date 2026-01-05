@@ -197,7 +197,7 @@ class ScrollAndClick {
         clickedCount++;
 
         // Vent på lightbox
-        await ctx.Lib.sleep(500);
+        await ctx.Lib.sleep(150);
 
         // Se etter lightbox/modal
         const lightbox = document.querySelector('[class*="lightbox"], [class*="modal"], [class*="overlay"], [class*="popup"]');
@@ -222,7 +222,7 @@ class ScrollAndClick {
             ctx.log({ msg: `Lukker med selector: ${selector}` });
             closeBtn.click();
             closed = true;
-            await ctx.Lib.sleep(250);
+            await ctx.Lib.sleep(150);
             break;
           }
         }
@@ -231,7 +231,7 @@ class ScrollAndClick {
           // Fallback: ESC-tast
           ctx.log({ msg: "Prøver ESC-tast" });
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-          await ctx.Lib.sleep(250);
+          await ctx.Lib.sleep(150);
         }
 
       } catch (e) {
