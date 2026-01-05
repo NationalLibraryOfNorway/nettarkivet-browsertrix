@@ -125,7 +125,7 @@ class ScrollAndClick {
           elem.click();
           clicksThisRound++;
           click++;
-          await ctx.Lib.sleep(150);
+          await ctx.Lib.sleep(50);
         }
       }
 
@@ -152,7 +152,7 @@ class ScrollAndClick {
     // Scroll tilbake til toppen
     ctx.log({ msg: "Scroller tilbake til toppen" });
     window.scrollTo(0, 0);
-    await ctx.Lib.sleep(200);
+    await ctx.Lib.sleep(100);
 
     // Klikk på alle lenker
     const allLinks = document.querySelectorAll('a[href]');
@@ -222,7 +222,7 @@ class ScrollAndClick {
             ctx.log({ msg: `Lukker med selector: ${selector}` });
             closeBtn.click();
             closed = true;
-            await ctx.Lib.sleep(100);
+            await ctx.Lib.sleep(50);
             break;
           }
         }
@@ -231,7 +231,7 @@ class ScrollAndClick {
           // Fallback: ESC-tast
           ctx.log({ msg: "Prøver ESC-tast" });
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-          await ctx.Lib.sleep(100);
+          await ctx.Lib.sleep(50);
         }
 
       } catch (e) {
