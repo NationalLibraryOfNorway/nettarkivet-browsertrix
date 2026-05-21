@@ -30,7 +30,7 @@ class FriskusBehavior {
     return false;
   }
 
-  async scrollToLoadAll(ctx) {
+  async *scrollToLoadAll(ctx) {
     const { getState, sleep } = ctx.Lib;
     const maxScrollAttempts = 100;
     let lastHeight = 0;
@@ -94,7 +94,7 @@ class FriskusBehavior {
     return false;
   }
 
-  async clickDetailTabs(ctx) {
+  async *clickDetailTabs(ctx) {
     const { getState, sleep, scrollIntoView } = ctx.Lib;
 
     // On event detail pages, click tabs like Kontakt, Kart
