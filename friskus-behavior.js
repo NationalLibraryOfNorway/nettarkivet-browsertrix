@@ -17,7 +17,6 @@ class FriskusBehavior {
 
   async dismissCookieConsent(ctx) {
     const { sleep } = ctx.Lib;
-    // Look for the "Godta" (Accept) button in the cookie consent banner
     const buttons = document.querySelectorAll("button");
     for (const btn of buttons) {
       if (btn.textContent.trim() === "Godta") {
@@ -28,47 +27,6 @@ class FriskusBehavior {
       }
     }
     return false;
-  }
-
-  async *scrollToLoadAll(ctx) {
-    const { getState, sleep } = ctx.Lib;
-    const maxScrollAttempts = 100;
-    let lastHeight = 0;
-    let unchangedCount = 0;
-
-    for (let i = 0; i < maxScrollAttempts; i++) {
-      const currentHeight = document.documentElement.scrollHeight;
-
-      window.scrollTo({
-        top: currentHeight,
-        behavior: "smooth",
-      });
-
-      await sleep(1500);
-
-      // Check for "Load more" / "Last mer" / "Vis mer" buttons
-      const loadMoreClicked = await this.clickLoadMore(ctx);
-
-      if (loadMoreClicked) {
-        await sleep(2000);
-        unchangedCount = 0;
-        continue;
-      }
-
-      const newHeight = document.documentElement.scrollHeight;
-      if (newHeight === lastHeight) {
-        unchangedCount++;
-        if (unchangedCount >= 3) {
-          break;
-        }
-      } else {
-        unchangedCount = 0;
-      }
-      lastHeight = newHeight;
-
-      ctx.state.scrolls++;
-      yield getState(ctx, `Scrolled page (attempt ${i + 1})`, "scrolls");
-    }
   }
 
   async clickLoadMore(ctx) {
@@ -94,36 +52,8 @@ class FriskusBehavior {
     return false;
   }
 
-  async *clickDetailTabs(ctx) {
-    const { getState, sleep, scrollIntoView } = ctx.Lib;
-
-    // On event detail pages, click tabs like Kontakt, Kart
-    const tabButtons = document.querySelectorAll(
-      '[role="tab"], .mat-tab-label, .tab-button, button'
-    );
-
-    for (const tab of tabButtons) {
-      const text = (tab.textContent || "").trim();
-      if (
-        text === "Kontakt" ||
-        text === "Kart" ||
-        text === "Praktisk informasjon" ||
-        text === "Om"
-      ) {
-        scrollIntoView(tab);
-        await sleep(300);
-        tab.click();
-        ctx.state.tabs++;
-        yield getState(ctx, `Clicked tab: ${text}`, "tabs");
-        await sleep(1000);
-      }
-    }
-  }
-
   async expandEventDates(ctx) {
     const { sleep, scrollIntoView } = ctx.Lib;
-
-    // Look for expandable date sections or "show all dates" buttons
     const expandButtons = document.querySelectorAll(
       'button, [role="button"], .expand, .show-all'
     );
@@ -170,56 +100,134 @@ class FriskusBehavior {
     if (this.isEventListingPage()) {
       ctx.log("Running behavior on event listing page");
 
-      // Count initial events
       const initialEvents = document.querySelectorAll('a[href*="/events/"]');
       ctx.state.events = initialEvents.length;
-      yield getState(
-        ctx,
-        `Found ${initialEvents.length} initial events`,
-        "events"
-      );
+      yield getState(ctx, "Found " + initialEvents.length + " initial events", "events");
 
       // Scroll to load all events
-      yield* this.scrollToLoadAll(ctx);
+      const maxScrollAttempts = 100;
+      let lastHeight = 0;
+      let unchangedCount = 0;
 
-      // Count final events
+      for (let i = 0; i < maxScrollAttempts; i++) {
+        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+        await sleep(1500);
+
+        const loadMoreClicked = await this.clickLoadMore(ctx);
+        if (loadMoreClicked) {
+          await sleep(2000);
+          unchangedCount = 0;
+          continue;
+        }
+
+        const newHeight = document.documentElement.scrollHeight;
+        if (newHeight === lastHeight) {
+          unchangedCount++;
+          if (unchangedCount >= 3) break;
+        } else {
+          unchangedCount = 0;
+        }
+        lastHeight = newHeight;
+
+        ctx.state.scrolls++;
+        yield getState(ctx, "Scrolled page (attempt " + (i + 1) + ")", "scrolls");
+      }
+
       const finalEvents = document.querySelectorAll('a[href*="/events/"]');
       ctx.state.events = finalEvents.length;
-      yield getState(
-        ctx,
-        `Loaded ${finalEvents.length} total events`,
-        "events"
-      );
+      yield getState(ctx, "Loaded " + finalEvents.length + " total events", "events");
+
     } else if (this.isEventDetailPage()) {
       ctx.log("Running behavior on event detail page");
-
-      // Wait for content to render
       await sleep(1000);
 
       // Expand any collapsed sections
       await this.expandEventDates(ctx);
 
       // Click through tabs to ensure all content is loaded
-      yield* this.clickDetailTabs(ctx);
+      const tabButtons = document.querySelectorAll(
+        '[role="tab"], .mat-tab-label, .tab-button, button'
+      );
+      for (const tab of tabButtons) {
+        const text = (tab.textContent || "").trim();
+        if (text === "Kontakt" || text === "Kart" || text === "Praktisk informasjon" || text === "Om") {
+          scrollIntoView(tab);
+          await sleep(300);
+          tab.click();
+          ctx.state.tabs++;
+          yield getState(ctx, "Clicked tab: " + text, "tabs");
+          await sleep(1000);
+        }
+      }
 
       // Scroll through the entire page to trigger lazy loading
-      yield* this.scrollToLoadAll(ctx);
+      let lastHeight2 = 0;
+      let unchangedCount2 = 0;
+      for (let i = 0; i < 50; i++) {
+        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+        await sleep(1500);
+
+        const newHeight = document.documentElement.scrollHeight;
+        if (newHeight === lastHeight2) {
+          unchangedCount2++;
+          if (unchangedCount2 >= 3) break;
+        } else {
+          unchangedCount2 = 0;
+        }
+        lastHeight2 = newHeight;
+
+        ctx.state.scrolls++;
+        yield getState(ctx, "Scrolled detail page (attempt " + (i + 1) + ")", "scrolls");
+      }
 
       yield getState(ctx, "Finished processing event detail page");
+
     } else if (this.isOrganisationPage()) {
       ctx.log("Running behavior on organisation page");
-
       await sleep(1000);
 
-      // Scroll to load all content
-      yield* this.scrollToLoadAll(ctx);
+      let lastHeight3 = 0;
+      let unchangedCount3 = 0;
+      for (let i = 0; i < 50; i++) {
+        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+        await sleep(1500);
+
+        const newHeight = document.documentElement.scrollHeight;
+        if (newHeight === lastHeight3) {
+          unchangedCount3++;
+          if (unchangedCount3 >= 3) break;
+        } else {
+          unchangedCount3 = 0;
+        }
+        lastHeight3 = newHeight;
+
+        ctx.state.scrolls++;
+        yield getState(ctx, "Scrolled org page (attempt " + (i + 1) + ")", "scrolls");
+      }
 
       yield getState(ctx, "Finished processing organisation page");
+
     } else {
       ctx.log("Running default scroll behavior on: " + window.location.href);
 
-      // Generic scroll behavior for other pages
-      yield* this.scrollToLoadAll(ctx);
+      let lastHeight4 = 0;
+      let unchangedCount4 = 0;
+      for (let i = 0; i < 50; i++) {
+        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+        await sleep(1500);
+
+        const newHeight = document.documentElement.scrollHeight;
+        if (newHeight === lastHeight4) {
+          unchangedCount4++;
+          if (unchangedCount4 >= 3) break;
+        } else {
+          unchangedCount4 = 0;
+        }
+        lastHeight4 = newHeight;
+
+        ctx.state.scrolls++;
+        yield getState(ctx, "Scrolled page (attempt " + (i + 1) + ")", "scrolls");
+      }
 
       yield getState(ctx, "Finished scrolling page");
     }
