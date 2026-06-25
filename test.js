@@ -1,8 +1,8 @@
 class PingvinavisaBehavior {
-  static id = "PingvinavisaBehavior";
+  static id = "PingvinavisaReactBehavior";
 
   static isMatch() {
-    return true; // Lar den kjøre overalt. Crawlerens egne regler vil styre hva som faktisk lagres.
+    return true; 
   }
 
   static init() {
@@ -11,16 +11,15 @@ class PingvinavisaBehavior {
 
   async dismissCookieConsent(ctx) {
     var sleep = ctx.Lib.sleep;
-    var buttons = document.querySelectorAll("button, a, [role='button']");
+    // Cookie-banneret tegnes også av React, så vi må lete etter det
+    var buttons = document.querySelectorAll("button");
     for (var bi = 0; bi < buttons.length; bi++) {
       var btn = buttons[bi];
       var text = (btn.innerText || btn.textContent || "").trim().toLowerCase();
       if (text === "godta alle" || text === "godta") {
-        var rect = btn.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) { 
-          // Ekte museklikk på cookie-banner
+        if (btn.offsetParent !== null) { 
           btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-          ctx.log("Fjernet cookie-banner.");
+          ctx.log("Lukket React-basert cookie-banner.");
           await sleep(1000);
           return true;
         }
@@ -31,19 +30,20 @@ class PingvinavisaBehavior {
 
   async clickLoadMore(ctx) {
     var sleep = ctx.Lib.sleep;
-    var elements = document.querySelectorAll("button, a");
+    var elements = document.querySelectorAll("button, a, span, div");
     
     for (var ci = 0; ci < elements.length; ci++) {
       var el = elements[ci];
       var text = (el.innerText || el.textContent || "").toLowerCase();
       
-      if (text.includes("vis flere") || text.includes("last mer")) {
+      // I JSON-dataene så vi at knappen heter nøyaktig "Vis flere"
+      if (text.includes("vis flere") || text === "vis flere") {
         var rect = el.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
           el.scrollIntoView({ behavior: 'smooth', block: 'center' });
           await sleep(1000);
           
-          // TVUNGET MUSEKLIKK: Dette omgår nettsidens sperrer mot automatiserte klikk
+          // Omgår React sine "Synthetic Events" ved å trykke direkte på det dypeste elementet
           var clickEvent = new MouseEvent('click', {
             bubbles: true,
             cancelable: true,
@@ -51,8 +51,10 @@ class PingvinavisaBehavior {
           });
           el.dispatchEvent(clickEvent);
           
-          ctx.log("Tvang frem fysisk museklikk på: " + text);
-          await sleep(4000); // Må være høy nok til at de nye artiklene rekker å dukke opp
+          ctx.log("Trykket på React-knappen: 'Vis flere'");
+          
+          // Må vente lenge nok til at React gjør et nytt API-kall og tegner de nye sakene
+          await sleep(4000); 
           return true;
         }
       }
@@ -64,10 +66,13 @@ class PingvinavisaBehavior {
     var getState = ctx.Lib.getState;
     var sleep = ctx.Lib.sleep;
 
-    ctx.log("Starter forenklet adferd for å mate skjermen...");
+    ctx.log("Venter 5 sekunder for at React skal tegne opp nettsiden...");
+    // DETTE ER MAGIEN: Vi tvinger scriptet til å sove før det gjør NOE SOM HELST
+    await sleep(5000); 
+
     await this.dismissCookieConsent(ctx);
 
-    var maxAttempts = 60; // Sikkerhetsstopp! Forhindrer at scriptet låser crawleren i timesvis.
+    var maxAttempts = 60; 
     var lastHeight = document.documentElement.scrollHeight;
     var unchangedCount = 0;
 
@@ -77,7 +82,7 @@ class PingvinavisaBehavior {
       if (loadMoreClicked) {
         ctx.state.clicks++;
         unchangedCount = 0; 
-        yield getState(ctx, "Utvidet listen", "clicks");
+        yield getState(ctx, "Utvidet listen via React", "clicks");
         continue; 
       }
 
@@ -86,11 +91,10 @@ class PingvinavisaBehavior {
 
       var newHeight = document.documentElement.scrollHeight;
       if (newHeight === lastHeight) {
-        // Vi venter 2 sekunder ekstra for å se om nettet er tregt
         await sleep(2000);
         if (document.documentElement.scrollHeight === lastHeight) {
-           ctx.log("Scriptet er ferdig. Gir nå stafettpinnen videre til crawler-motoren for å fange lenkene.");
-           break; // Dette breake-et er KRITISK for at crawleren skal få lov til å begynne å besøke artiklene
+           ctx.log("Ingen flere knapper funnet. Overlater til crawleren å fange opp lenkene.");
+           break; 
         }
       } else {
         unchangedCount = 0;
@@ -98,7 +102,7 @@ class PingvinavisaBehavior {
       lastHeight = document.documentElement.scrollHeight;
 
       ctx.state.scrolls++;
-      yield getState(ctx, "Scrollet", "scrolls");
+      yield getState(ctx, "Scrollet for å sjekke om siden vokser", "scrolls");
     }
   }
 }
