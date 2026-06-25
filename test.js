@@ -1,12 +1,13 @@
 class PingvinavisaBehavior {
   static id = "PingvinavisaReactBehavior";
 
+  // Vi lar scriptet kjøre uansett, og stoler på at Browsertrix sitt "Scope" stopper feil lenker
   static isMatch() {
     return true; 
   }
 
   static init() {
-    return { state: { clicks: 0, articlesFound: 0 } };
+    return { state: { clicks: 0, articlesFound: 0, scrolls: 0 } };
   }
 
   async dismissCookieConsent(ctx) {
@@ -14,7 +15,7 @@ class PingvinavisaBehavior {
     for (var bi = 0; bi < buttons.length; bi++) {
       var text = (buttons[bi].innerText || buttons[bi].textContent || "").trim().toLowerCase();
       if (text === "godta alle" || text === "godta") {
-        buttons[bi].click(); // Enkelt klikk fungerer vanligvis for UNN sitt samtykkebanner
+        buttons[bi].click(); // Enkelt klikk fungerer vanligvis for samtykkebanneret
         ctx.log("Lukket samtykkebanner.");
         await ctx.Lib.sleep(1000);
         return true;
@@ -24,12 +25,14 @@ class PingvinavisaBehavior {
   }
 
   async clickLoadMore(ctx) {
-    // Ser etter elementer som inneholder teksten "vis flere"
+    // Ser etter elementer som inneholder knappen
     var elements = document.querySelectorAll("button, a, span, div");
     
     for (var i = 0; i < elements.length; i++) {
       var text = (elements[i].innerText || elements[i].textContent || "").trim().toLowerCase();
-      if (text === "vis flere") {
+      
+      // Bruker .includes slik at den også treffer f.eks. "Vis flere (44)"
+      if (text.includes("vis flere")) {
         elements[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
         await ctx.Lib.sleep(1000);
         
@@ -37,7 +40,7 @@ class PingvinavisaBehavior {
         elements[i].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
         
         ctx.log("Trykket på 'Vis flere'-knappen.");
-        await ctx.Lib.sleep(4000); // Gir React god tid til å hente nye artikler
+        await ctx.Lib.sleep(4000); // Gir React god tid til å hente og tegne opp nye artikler
         return true;
       }
     }
@@ -48,22 +51,25 @@ class PingvinavisaBehavior {
     var addLink = ctx.Lib.addLink;
     var newCount = 0;
     
-    // Vi leter utelukkende etter anker-taggene (<a>) som inneholder /pingvinavisa/ 
-    // Dette fanger opp den skjulte "visuallyhidden"-lenken du fant i kildekoden!
+    // Vi leter etter anker-taggene (<a>) som inneholder /pingvinavisa/ 
+    // Dette fanger opp den skjulte "visuallyhidden"-lenken!
     var links = document.querySelectorAll("a[href*='/pingvinavisa/']");
     
     for (var j = 0; j < links.length; j++) {
-      // Ved å bruke egenskapen .href gjør nettleseren automatisk 
-      // "/pingvinavisa/nyheter/.." om til "https://www.unn.no/pingvinavisa/nyheter/.."
-      var absoluteHref = links[j].href; 
-      
-      if (absoluteHref && !absoluteHref.includes('#') && !seenUrls.has(absoluteHref)) {
-        seenUrls.add(absoluteHref);
+      try {
+        // Gjør om relative lenker ("/pingvinavisa/...") til fulle URL-er ("https://www.unn.no/...")
+        var absoluteHref = new URL(links[j].getAttribute('href'), window.location.origin).href; 
         
-        if (typeof addLink === "function") {
-          addLink(absoluteHref); // Sender den komplette lenken til Browsertrix
+        if (absoluteHref && !absoluteHref.includes('#') && !seenUrls.has(absoluteHref)) {
+          seenUrls.add(absoluteHref);
+          
+          if (typeof addLink === "function") {
+            addLink(absoluteHref); // Sender den komplette lenken til Browsertrix
+          }
+          newCount++;
         }
-        newCount++;
+      } catch (e) {
+        // Ignorer lenker som krasjer URL-byggeren
       }
     }
     
@@ -86,7 +92,7 @@ class PingvinavisaBehavior {
     // Henter de første artiklene som allerede er synlige på skjermen
     this.collectAndAddLinks(ctx, seenUrls);
 
-    var maxAttempts = 100; // Stopper scriptet etter max 100 klikk
+    var maxAttempts = 100; // Stopper scriptet etter max 100 klikk for å forhindre evig loop
     var lastHeight = document.documentElement.scrollHeight;
     var unchangedCount = 0;
 
@@ -105,7 +111,7 @@ class PingvinavisaBehavior {
         continue; 
       }
 
-      // 3. Hvis ingen knapp, scroll ned for å trigge lazy-loading
+      // 3. Hvis ingen knapp ble funnet, scroll ned for å trigge eventuell lazy-loading
       window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
       await sleep(2000); 
       
@@ -125,9 +131,10 @@ class PingvinavisaBehavior {
       }
       lastHeight = newHeight;
 
+      ctx.state.scrolls++;
       yield getState(ctx, "Scrollet. Artikler i innhøstingskø: " + seenUrls.size, "articlesFound");
     }
     
-    yield getState(ctx, "Behavior-script ferdig. Crawleren tar nå over for å besøke artiklene!");
+    yield getState(ctx, "Behavior-script ferdig. Crawleren tar nå over for å besøke alle artiklene!");
   }
 }
