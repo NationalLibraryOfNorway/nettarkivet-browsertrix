@@ -11,6 +11,7 @@ class FriskusBehavior {
         events: 0,
         tabs: 0,
         scrolls: 0,
+        sitemapProcessed: false,
       },
     };
   }
@@ -109,6 +110,50 @@ class FriskusBehavior {
     return newCount;
   }
 
+  async harvestSitemap(ctx, sitemapUrl, seenUrls, visitedSitemaps) {
+    if (visitedSitemaps.has(sitemapUrl)) return;
+    visitedSitemaps.add(sitemapUrl);
+
+    ctx.log("Fetching sitemap: " + sitemapUrl);
+    try {
+      var response = await fetch(sitemapUrl);
+      if (!response.ok) {
+        ctx.log("Failed to fetch sitemap: " + sitemapUrl + " (status " + response.status + ")");
+        return;
+      }
+      var text = await response.text();
+      var parser = new DOMParser();
+      var xmlDoc = parser.parseFromString(text, "text/xml");
+      
+      var parserError = xmlDoc.querySelector("parsererror");
+      if (parserError) {
+        ctx.log("XML parse error for sitemap: " + sitemapUrl);
+        return;
+      }
+
+      var locElements = xmlDoc.getElementsByTagName("loc");
+      ctx.log("Found " + locElements.length + " entries in sitemap: " + sitemapUrl);
+
+      for (var i = 0; i < locElements.length; i++) {
+        var loc = (locElements[i].textContent || "").trim();
+        if (!loc) continue;
+
+        if (loc.endsWith(".xml") || loc.includes("/sitemap")) {
+          await this.harvestSitemap(ctx, loc, seenUrls, visitedSitemaps);
+        } else {
+          if (!seenUrls.has(loc)) {
+            seenUrls.add(loc);
+            if (typeof ctx.Lib.addLink === "function") {
+              ctx.Lib.addLink(loc);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      ctx.log("Error processing sitemap " + sitemapUrl + ": " + err.message);
+    }
+  }
+
   async *run(ctx) {
     var getState = ctx.Lib.getState;
     var sleep = ctx.Lib.sleep;
@@ -116,6 +161,15 @@ class FriskusBehavior {
 
     // Track all discovered URLs
     var seenUrls = new Set();
+
+    if (!ctx.state.sitemapProcessed) {
+      ctx.state.sitemapProcessed = true;
+      yield getState(ctx, "Starting sitemap harvesting...", "events");
+      var visitedSitemaps = new Set();
+      var originSitemap = window.location.origin + "/sitemap.xml";
+      await this.harvestSitemap(ctx, originSitemap, seenUrls, visitedSitemaps);
+      yield getState(ctx, "Sitemap harvesting completed. Found " + seenUrls.size + " URLs from sitemap.", "events");
+    }
 
     // Dismiss cookie consent first
     await this.dismissCookieConsent(ctx);
