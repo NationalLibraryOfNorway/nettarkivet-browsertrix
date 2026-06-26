@@ -124,7 +124,7 @@ class FriskusBehavior {
       var text = await response.text();
       var parser = new DOMParser();
       var xmlDoc = parser.parseFromString(text, "text/xml");
-      
+
       var parserError = xmlDoc.querySelector("parsererror");
       if (parserError) {
         ctx.log("XML parse error for sitemap: " + sitemapUrl);
@@ -154,6 +154,174 @@ class FriskusBehavior {
     }
   }
 
+  isMainPortalPage() {
+    var host = window.location.hostname;
+    return host === 'friskus.com' || host === 'www.friskus.com';
+  }
+
+  collectMunicipalityLinks(ctx, seenUrls) {
+    var addLink = ctx.Lib.addLink;
+    var newCount = 0;
+    var links = document.querySelectorAll('a');
+    for (var j = 0; j < links.length; j++) {
+      var href = links[j].href;
+      if (href) {
+        try {
+          var urlObj = new URL(href);
+          var hostname = urlObj.hostname;
+          if (hostname.endsWith('.friskus.com') && hostname !== 'www.friskus.com' && hostname !== 'friskus.com') {
+            var municipalityOrigin = urlObj.origin + "/";
+            if (!seenUrls.has(municipalityOrigin)) {
+              seenUrls.add(municipalityOrigin);
+              if (typeof addLink === "function") {
+                addLink(municipalityOrigin);
+              }
+              newCount++;
+            }
+          }
+        } catch (e) {
+          // Ignore
+        }
+      }
+    }
+    return newCount;
+  }
+
+  extractMunicipalitiesFromJsonLd(ctx, seenUrls) {
+    var addLink = ctx.Lib.addLink;
+    var count = 0;
+    try {
+      var scripts = document.querySelectorAll('script[type="application/ld+json"]');
+      for (var i = 0; i < scripts.length; i++) {
+        try {
+          var text = scripts[i].textContent;
+          if (!text) continue;
+          var data = JSON.parse(text);
+          if (data && data.areaServed && Array.isArray(data.areaServed)) {
+            for (var j = 0; j < data.areaServed.length; j++) {
+              var url = data.areaServed[j].url;
+              if (url) {
+                try {
+                  var urlObj = new URL(url);
+                  var normalized = urlObj.origin + "/";
+                  if (!seenUrls.has(normalized)) {
+                    seenUrls.add(normalized);
+                    if (typeof addLink === "function") {
+                      addLink(normalized);
+                    }
+                    count++;
+                  }
+                } catch (e) { }
+              }
+            }
+          }
+        } catch (inner) { }
+      }
+    } catch (e) {
+      ctx.log("Error parsing JSON-LD: " + e.message);
+    }
+    if (count > 0) {
+      ctx.log("Found " + count + " municipality URLs from JSON-LD.");
+    }
+    return count;
+  }
+
+  async handleHorizontalCarousels(ctx, seenUrls) {
+    var sleep = ctx.Lib.sleep;
+    ctx.log("Checking for horizontal carousels/sliders...");
+
+    // 1. Programmatically scroll any horizontally scrollable container
+    var scrollableContainers = [];
+    var allElements = document.querySelectorAll('*');
+    for (var i = 0; i < allElements.length; i++) {
+      var el = allElements[i];
+      var style = window.getComputedStyle(el);
+      var overflowX = style.overflowX;
+      if ((overflowX === 'auto' || overflowX === 'scroll' || el.scrollWidth > el.clientWidth) && el.clientWidth > 100) {
+        scrollableContainers.push(el);
+      }
+    }
+
+    if (scrollableContainers.length > 0) {
+      ctx.log("Found " + scrollableContainers.length + " horizontally scrollable containers.");
+      for (var s = 0; s < scrollableContainers.length; s++) {
+        var container = scrollableContainers[s];
+        var currentScroll = 0;
+        var maxScroll = container.scrollWidth - container.clientWidth;
+        var step = Math.max(container.clientWidth / 2, 200);
+
+        ctx.log("Scrolling container horizontally (max scroll: " + maxScroll + ")");
+        while (currentScroll < maxScroll) {
+          currentScroll += step;
+          container.scrollTo({ left: currentScroll, behavior: 'smooth' });
+          await sleep(500);
+          this.collectMunicipalityLinks(ctx, seenUrls);
+        }
+      }
+    }
+
+    // 2. Find and click arrow/next buttons in carousels
+    var buttons = document.querySelectorAll('button, [role="button"], .next, .arrow-right, .chevron-right, [class*="next"], [class*="arrow"], [class*="chevron"]');
+    var nextButtons = [];
+    for (var b = 0; b < buttons.length; b++) {
+      var btn = buttons[b];
+      var text = (btn.textContent || "").trim().toLowerCase();
+      var className = (btn.className || "").toString().toLowerCase();
+      var ariaLabel = (btn.getAttribute('aria-label') || "").toLowerCase();
+      var id = (btn.id || "").toLowerCase();
+
+      var isNext = false;
+      if (className.includes('next') || className.includes('right') || className.includes('arrow') || className.includes('chevron')) {
+        isNext = true;
+      }
+      if (ariaLabel.includes('next') || ariaLabel.includes('neste') || ariaLabel.includes('høyre') || ariaLabel.includes('right')) {
+        isNext = true;
+      }
+      if (id.includes('next') || id.includes('right')) {
+        isNext = true;
+      }
+      var svg = btn.querySelector('svg');
+      if (svg) {
+        var svgClass = (svg.className || "").toString().toLowerCase();
+        if (svgClass.includes('right') || svgClass.includes('next') || svgClass.includes('arrow') || svgClass.includes('chevron')) {
+          isNext = true;
+        }
+      }
+
+      if (text === "godta" || text.includes("cookie") || text.includes("samtykke")) {
+        isNext = false;
+      }
+
+      if (isNext) {
+        nextButtons.push(btn);
+      }
+    }
+
+    if (nextButtons.length > 0) {
+      ctx.log("Found " + nextButtons.length + " potential carousel next buttons. Clicking them to reveal items...");
+      for (var n = 0; n < nextButtons.length; n++) {
+        var nextBtn = nextButtons[n];
+        try {
+          ctx.Lib.scrollIntoView(nextBtn);
+          await sleep(300);
+
+          for (var clickAttempt = 0; clickAttempt < 10; clickAttempt++) {
+            if (nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true') {
+              break;
+            }
+
+            ctx.log("Clicking carousel button (attempt " + (clickAttempt + 1) + ")");
+            nextBtn.click();
+            await sleep(800);
+            this.collectMunicipalityLinks(ctx, seenUrls);
+          }
+        } catch (e) {
+          ctx.log("Error clicking carousel button: " + e.message);
+        }
+      }
+    }
+  }
+
   async *run(ctx) {
     var getState = ctx.Lib.getState;
     var sleep = ctx.Lib.sleep;
@@ -175,7 +343,46 @@ class FriskusBehavior {
     await this.dismissCookieConsent(ctx);
     await sleep(500);
 
-    if (this.isEventListingPage()) {
+    if (this.isMainPortalPage()) {
+      ctx.log("Running behavior on main portal page: " + window.location.href);
+
+      // 1. Extract from JSON-LD
+      var jsonLdCount = this.extractMunicipalitiesFromJsonLd(ctx, seenUrls);
+      yield getState(ctx, "Extracted " + jsonLdCount + " municipalities from JSON-LD", "events");
+
+      // 2. Collect initial links
+      var initialMunicipalityCount = this.collectMunicipalityLinks(ctx, seenUrls);
+      yield getState(ctx, "Collected " + initialMunicipalityCount + " initial municipality links", "events");
+
+      // 3. Handle horizontal carousels
+      yield getState(ctx, "Processing horizontal carousels...", "events");
+      await this.handleHorizontalCarousels(ctx, seenUrls);
+
+      // 4. Scroll vertically to capture everything else (footer, etc.)
+      var lastHeight = 0;
+      var unchangedCount = 0;
+      for (var i = 0; i < 20; i++) {
+        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+        await sleep(1500);
+
+        var added = this.collectMunicipalityLinks(ctx, seenUrls);
+
+        var newHeight = document.documentElement.scrollHeight;
+        if (newHeight === lastHeight && added === 0) {
+          unchangedCount++;
+          if (unchangedCount >= 3) break;
+        } else {
+          unchangedCount = 0;
+        }
+        lastHeight = newHeight;
+
+        ctx.state.scrolls++;
+        yield getState(ctx, "Scrolled page vertically, total links: " + seenUrls.size, "scrolls");
+      }
+
+      yield getState(ctx, "Finished portal page. Total unique URLs queued: " + seenUrls.size, "events");
+
+    } else if (this.isEventListingPage()) {
       ctx.log("Running behavior on event listing page");
 
       // Collect initial links
