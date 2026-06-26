@@ -11,7 +11,7 @@ class PingvinavisaBehavior {
   }
 
   async dismissCookieConsent(ctx) {
-    var buttons = document.querySelectorAll("button");
+    var buttons = document.querySelectorAll("button, a, div, span");
     for (var bi = 0; bi < buttons.length; bi++) {
       var text = (buttons[bi].innerText || buttons[bi].textContent || "").trim().toLowerCase();
       if (text === "godta alle" || text === "godta") {
@@ -51,16 +51,27 @@ class PingvinavisaBehavior {
     var addLink = ctx.Lib.addLink;
     var newCount = 0;
     
-    // Vi leter etter anker-taggene (<a>) som inneholder /pingvinavisa/ 
-    // Dette fanger opp den skjulte "visuallyhidden"-lenken!
-    var links = document.querySelectorAll("a[href*='/pingvinavisa/']");
+    // Vi henter alle anker-tagger på siden
+    var links = document.querySelectorAll("a");
     
     for (var j = 0; j < links.length; j++) {
       try {
-        // Gjør om relative lenker ("/pingvinavisa/...") til fulle URL-er ("https://www.unn.no/...")
-        var absoluteHref = new URL(links[j].getAttribute('href'), window.location.origin).href; 
+        var rawHref = links[j].getAttribute('href');
+        if (!rawHref) continue;
+
+        // Ignorer e-post, javascript-kall og interne sideoppsett-ankere
+        if (rawHref.startsWith('mailto:') || rawHref.startsWith('javascript:') || rawHref.startsWith('#')) {
+          continue;
+        }
+
+        // links[j].href gir alltid den fullstendige, absolutte URL-en oppløst av nettleseren
+        var absoluteHref = links[j].href;
         
-        if (absoluteHref && !absoluteHref.includes('#') && !seenUrls.has(absoluteHref)) {
+        // Siden vi stoler på Browsertrix' eget Scope til å stoppe uønskede lenker til slutt,
+        // samler vi inn alle lenker som er en del av pingvinavisa eller generelle nyheter
+        var isRelevant = absoluteHref.includes('/pingvinavisa/') || absoluteHref.includes('/nyheter/');
+        
+        if (isRelevant && !seenUrls.has(absoluteHref)) {
           seenUrls.add(absoluteHref);
           
           if (typeof addLink === "function") {
