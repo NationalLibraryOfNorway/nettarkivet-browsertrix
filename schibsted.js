@@ -1,9 +1,8 @@
 class SchibstedBehavior {
   static id = "SchibstedBehavior";
 
-  static isMatch(url) {
-    const domains = ["vg.no", "aftenposten.no", "bt.no", "smp.no", "fvn.no", "e24.no"];
-    return domains.some(domain => url.includes(domain));
+  static isMatch() {
+    return true;
   }
 
   static init() {
