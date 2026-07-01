@@ -87,6 +87,19 @@ class PingvinavisaBehavior {
       return false;
     };
 
+    var clickNextPage = async function() {
+      var nextBtn = document.querySelector('button[title="Gå til neste side"], button[aria-label="Gå til neste side"], a[title="Gå til neste side"], a[aria-label="Gå til neste side"]');
+      if (nextBtn && !nextBtn.disabled && nextBtn.getAttribute('aria-disabled') !== 'true') {
+        nextBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await sleep(1000);
+        nextBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        ctx.log("Trykket på 'Gå til neste side'-knappen.");
+        await sleep(4000); // Vent til React har oppdatert listen
+        return true;
+      }
+      return false;
+    };
+
     var collectAndAddLinks = async function() {
       var newCount = 0;
       var links = document.querySelectorAll("a");
@@ -145,6 +158,17 @@ class PingvinavisaBehavior {
         
         yield getState("Klikket 'Vis flere', totalt funnet: " + seenUrls.size + " artikler", "clicks");
         continue; 
+      }
+
+      var paginated = await clickNextPage();
+      if (paginated) {
+        ctx.state.clicks++;
+        unchangedCount = 0;
+        
+        await collectAndAddLinks();
+        
+        yield getState("Klikket 'Neste side', totalt funnet: " + seenUrls.size + " artikler", "clicks");
+        continue;
       }
 
       window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
