@@ -72,7 +72,7 @@ class PingvinavisaBehavior {
     };
 
     var clickLoadMore = async function() {
-      var elements = document.querySelectorAll("button, a, span, div");
+      var elements = document.querySelectorAll("button, a, [role='button']");
       for (var i = 0; i < elements.length; i++) {
         var text = (elements[i].innerText || elements[i].textContent || "").trim().toLowerCase();
         if (text.includes("vis flere")) {
