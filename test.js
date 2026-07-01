@@ -23,10 +23,10 @@ class PingvinavisaBehavior {
       }
     };
 
-    var addLink = function(url) {
+    var addLink = async function(url) {
       var fn = (ctx.Lib && ctx.Lib.addLink) || ctx.addLink || self["__bx_addLink"];
       if (typeof fn === "function") {
-        fn(url);
+        await fn(url);
       } else {
         ctx.log("Advarsel: Fant ikke addLink-funksjon. Kan ikke legge til: " + url);
       }
@@ -87,7 +87,7 @@ class PingvinavisaBehavior {
       return false;
     };
 
-    var collectAndAddLinks = function() {
+    var collectAndAddLinks = async function() {
       var newCount = 0;
       var links = document.querySelectorAll("a");
       
@@ -107,7 +107,7 @@ class PingvinavisaBehavior {
           
           if (isRelevant && !seenUrls.has(absoluteHref)) {
             seenUrls.add(absoluteHref);
-            addLink(absoluteHref);
+            await addLink(absoluteHref);
             newCount++;
           }
         } catch (e) {
@@ -127,7 +127,7 @@ class PingvinavisaBehavior {
 
     await dismissCookieConsent();
     
-    collectAndAddLinks();
+    await collectAndAddLinks();
 
     var maxAttempts = 100;
     var lastHeight = document.documentElement.scrollHeight;
@@ -140,7 +140,7 @@ class PingvinavisaBehavior {
         ctx.state.clicks++;
         unchangedCount = 0; 
         
-        collectAndAddLinks();
+        await collectAndAddLinks();
         
         yield getState("Klikket 'Vis flere', totalt funnet: " + seenUrls.size + " artikler", "clicks");
         continue; 
@@ -149,7 +149,7 @@ class PingvinavisaBehavior {
       window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
       await sleep(2000); 
       
-      var added = collectAndAddLinks();
+      var added = await collectAndAddLinks();
       ctx.state.articlesFound = seenUrls.size;
 
       var newHeight = document.documentElement.scrollHeight;
