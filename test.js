@@ -107,6 +107,7 @@ class PingvinavisaBehavior {
           
           if (isRelevant && !seenUrls.has(absoluteHref)) {
             seenUrls.add(absoluteHref);
+            ctx.log("Fant lenke: " + absoluteHref);
             await addLink(absoluteHref);
             newCount++;
           }
