@@ -77,6 +77,33 @@ class SchibstedBehavior {
       document.documentElement.style.setProperty('position', 'static', 'important');
       document.body.classList.remove('sp-message-open');
       document.documentElement.classList.remove('sp-message-open');
+
+      // Vent 2 sekunder etter samtykkeboksen er fjernet/håndtert
+      ctx.log("Venter i 2 sekunder før scrolling starter...");
+      await sleep(2000);
+
+      // Scroll nedover så langt som det lar seg gjøre
+      ctx.log("Starter rulling til bunnen av siden...");
+      var maxAttempts = 100;
+      var lastHeight = document.documentElement.scrollHeight;
+      var unchangedCount = 0;
+
+      for (var scrollAttempts = 0; scrollAttempts < maxAttempts; scrollAttempts++) {
+        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+        await sleep(1500); // Vent på at nytt innhold lastes
+
+        var newHeight = document.documentElement.scrollHeight;
+        if (newHeight === lastHeight) {
+          unchangedCount++;
+          if (unchangedCount >= 3) {
+            ctx.log("Rulling fullført. Nettsidens høyde endrer seg ikke mer.");
+            break;
+          }
+        } else {
+          unchangedCount = 0;
+        }
+        lastHeight = newHeight;
+      }
     }
 
     yield getState("Behavior-script ferdig.");
