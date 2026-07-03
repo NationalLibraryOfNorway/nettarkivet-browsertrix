@@ -5,8 +5,11 @@ class SchibstedBehavior {
     return true;
   }
 
+  static runInIframe = true;
+  static runInIframes = true;
+
   static init() {
-    return { state: { cookieBannerRemoved: false } };
+    return { state: { cookieBannerHandled: false } };
   }
 
   async *run(ctx) {
@@ -31,38 +34,49 @@ class SchibstedBehavior {
       return { state: key, msg: msg };
     };
 
-    ctx.log("Starter Schibsted behavior script... Venter i 2 sekunder.");
-    await sleep(2000);
+    ctx.log("Venter i 3 sekunder på at samtykkeboks eventuelt dukker opp...");
+    await sleep(3000);
 
-    // 1. Finn og fjern CMP-iframe(s)
-    var removed = false;
-    var iframes = document.querySelectorAll('iframe');
-    for (var i = 0; i < iframes.length; i++) {
-      var src = iframes[i].src || '';
-      var id = iframes[i].id || '';
-      var name = iframes[i].name || '';
-      if (src.includes('cmp') || id.includes('sp_message') || name.includes('sp_message')) {
-        iframes[i].remove();
-        ctx.log("Fjernet Schibsted CMP iframe: " + src);
-        removed = true;
+    var clicked = false;
+
+    // 1. Prøv å finne Sourcepoint CMP-knappen via standardklasse for "Godta alle"
+    var acceptBtn = document.querySelector('button.sp_choice_type_11, a.sp_choice_type_11');
+    if (acceptBtn) {
+      acceptBtn.click();
+      ctx.log("Klikket på 'Godta alle' via sp_choice_type_11.");
+      clicked = true;
+    }
+
+    // 2. Hvis ikke funnet via klasse, søk etter tekst
+    if (!clicked) {
+      var buttons = document.querySelectorAll("button, a, [role='button']");
+      for (var i = 0; i < buttons.length; i++) {
+        var text = (buttons[i].innerText || buttons[i].textContent || "").trim().toLowerCase();
+        if (text.includes("godta alle") || text.includes("tillat alle") || text.includes("accept all") || text === "godta" || text === "tillat") {
+          buttons[i].click();
+          ctx.log("Klikket på '" + text + "'-knappen via tekstsøk.");
+          clicked = true;
+          break;
+        }
       }
     }
 
-    // 2. Gjenopprett scrolling og overflow på html og body
-    document.body.style.setProperty('overflow', 'auto', 'important');
-    document.body.style.setProperty('position', 'static', 'important');
-    document.documentElement.style.setProperty('overflow', 'auto', 'important');
-    document.documentElement.style.setProperty('position', 'static', 'important');
-
-    // Fjern CSS-klasser lagt til av CMP som blokkerer rulling
-    document.body.classList.remove('sp-message-open');
-    document.documentElement.classList.remove('sp-message-open');
-
-    if (removed) {
-      ctx.state.cookieBannerRemoved = true;
-      yield getState("Fjernet cookiebox og gjenopprettet scrolling.", "cookieBannerRemoved");
+    if (clicked) {
+      ctx.state.cookieBannerHandled = true;
+      yield getState("Samtykkeboks håndtert.", "cookieBannerHandled");
+      await sleep(2000); // Vent på at banneret lukkes og lagrer samtykke
     } else {
-      ctx.log("Fant ingen Schibsted cookiebox.");
+      ctx.log("Ingen samtykkeboks funnet eller håndtert i denne konteksten.");
+    }
+
+    // Sikre at scrolling låses opp i hovedvinduet hvis CMP-en av en eller annen grunn henger
+    if (window.self === window.top) {
+      document.body.style.setProperty('overflow', 'auto', 'important');
+      document.body.style.setProperty('position', 'static', 'important');
+      document.documentElement.style.setProperty('overflow', 'auto', 'important');
+      document.documentElement.style.setProperty('position', 'static', 'important');
+      document.body.classList.remove('sp-message-open');
+      document.documentElement.classList.remove('sp-message-open');
     }
 
     yield getState("Behavior-script ferdig.");
