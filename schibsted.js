@@ -34,43 +34,81 @@ class SchibstedBehavior {
       return { state: key, msg: msg };
     };
 
-    ctx.log("Venter i 3 sekunder på at samtykkeboks eventuelt dukker opp...");
-    await sleep(3000);
+    var isIframe = window.self !== window.top;
 
-    var clicked = false;
-
-    // 1. Prøv å finne Sourcepoint CMP-knappen via standardklasse for "Godta alle"
-    var acceptBtn = document.querySelector('button.sp_choice_type_11, a.sp_choice_type_11');
-    if (acceptBtn) {
-      acceptBtn.click();
-      ctx.log("Klikket på 'Godta alle' via sp_choice_type_11.");
-      clicked = true;
-    }
-
-    // 2. Hvis ikke funnet via klasse, søk etter tekst
-    if (!clicked) {
-      var buttons = document.querySelectorAll("button, a, [role='button']");
-      for (var i = 0; i < buttons.length; i++) {
-        var text = (buttons[i].innerText || buttons[i].textContent || "").trim().toLowerCase();
-        if (text.includes("godta alle") || text.includes("tillat alle") || text.includes("accept all") || text === "godta" || text === "tillat") {
-          buttons[i].click();
-          ctx.log("Klikket på '" + text + "'-knappen via tekstsøk.");
+    if (isIframe) {
+      ctx.log("Kjører inni iframe: " + window.location.href);
+      
+      var clicked = false;
+      var maxAttempts = 20; // 10 sekunder maks
+      
+      for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        // 1. Prøv å finne Sourcepoint CMP-knappen via standardklasse for "Godta alle"
+        var acceptBtn = document.querySelector('button.sp_choice_type_11, a.sp_choice_type_11');
+        if (acceptBtn) {
+          acceptBtn.click();
+          ctx.log("Klikket på 'Godta alle' via sp_choice_type_11.");
           clicked = true;
           break;
         }
+
+        // 2. Søk etter tekst i knapper
+        var buttons = document.querySelectorAll("button, a, [role='button']");
+        for (var i = 0; i < buttons.length; i++) {
+          var text = (buttons[i].innerText || buttons[i].textContent || "").trim().toLowerCase();
+          if (text.includes("godta alle") || text.includes("tillat alle") || text.includes("accept all") || text === "godta" || text === "tillat") {
+            buttons[i].click();
+            ctx.log("Klikket på '" + text + "'-knappen via tekstsøk.");
+            clicked = true;
+            break;
+          }
+        }
+
+        if (clicked) {
+          break;
+        }
+
+        await sleep(500);
       }
-    }
 
-    if (clicked) {
-      ctx.state.cookieBannerHandled = true;
-      yield getState("Samtykkeboks håndtert.", "cookieBannerHandled");
-      await sleep(2000); // Vent på at banneret lukkes og lagrer samtykke
+      if (clicked) {
+        ctx.state.cookieBannerHandled = true;
+        yield getState("Samtykkeboks håndtert inni iframe.", "cookieBannerHandled");
+      }
     } else {
-      ctx.log("Ingen samtykkeboks funnet eller håndtert i denne konteksten.");
-    }
+      ctx.log("Kjører i hovedvinduet. Venter på at samtykkeboks/iframe skal lukkes...");
+      
+      var hasCmp = false;
+      var maxAttempts = 20; // 10 sekunder maks
+      
+      for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        var iframes = document.querySelectorAll('iframe');
+        var foundCmp = false;
+        for (var i = 0; i < iframes.length; i++) {
+          var src = iframes[i].src || '';
+          var id = iframes[i].id || '';
+          var name = iframes[i].name || '';
+          if (src.includes('cmp') || id.includes('sp_message') || name.includes('sp_message')) {
+            foundCmp = true;
+            break;
+          }
+        }
+        
+        if (!foundCmp) {
+          break;
+        }
+        
+        hasCmp = true;
+        await sleep(500);
+      }
 
-    // Sikre at scrolling låses opp i hovedvinduet hvis CMP-en av en eller annen grunn henger
-    if (window.self === window.top) {
+      if (hasCmp) {
+        ctx.log("Samtykkeboks lukket eller ikke lenger tilstede.");
+      } else {
+        ctx.log("Ingen samtykkeboks oppdaget.");
+      }
+
+      // Lås opp scrolling uansett for å være helt sikker
       document.body.style.setProperty('overflow', 'auto', 'important');
       document.body.style.setProperty('position', 'static', 'important');
       document.documentElement.style.setProperty('overflow', 'auto', 'important');
@@ -84,11 +122,11 @@ class SchibstedBehavior {
 
       // Scroll nedover så langt som det lar seg gjøre
       ctx.log("Starter rulling til bunnen av siden...");
-      var maxAttempts = 100;
+      var scrollMaxAttempts = 100;
       var lastHeight = document.documentElement.scrollHeight;
       var unchangedCount = 0;
 
-      for (var scrollAttempts = 0; scrollAttempts < maxAttempts; scrollAttempts++) {
+      for (var scrollAttempts = 0; scrollAttempts < scrollMaxAttempts; scrollAttempts++) {
         window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
         await sleep(1500); // Vent på at nytt innhold lastes
 
