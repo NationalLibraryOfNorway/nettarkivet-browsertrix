@@ -59,7 +59,8 @@ class GenericNorwegianBehavior {
     var consentWords = [
       "godta alle", "tillat alle", "aksepter alle", "godta", "tillat", "aksepter",
       "jeg forstår", "jeg aksepterer", "ok, godta", "ja, jeg samtykker", "samtykk",
-      "samtykker", "enig", "accept all", "allow all", "accept", "allow", "i agree", "ok"
+      "samtykker", "enig", "godkjenn alle", "godkjenn", "godkjenn og lukk",
+      "accept all", "allow all", "accept", "allow", "i agree", "ok"
     ];
 
     var isConsentText = function(text) {
