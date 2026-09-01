@@ -170,7 +170,7 @@ class AmediaPersonaliaBehavior {
     }
   }
 
-  // Hjelpefunksjon for å sjekke om en lenke er et enkelt hilsenkort
+  // Hjelpefunksjon for å sjekke om en lenke er et ekte Sanity hilsenkort
   isItemCardLink(link) {
     if (!link) return false;
     try {
@@ -182,7 +182,7 @@ class AmediaPersonaliaBehavior {
 
       const low = (href + " " + pathname + " " + dataLinkto).toLowerCase();
 
-      // Ekskluder absolutt alt som har med innlogging, oppretting (/new), redigering (/edit), mine hilsener eller kategorisider å gjøre
+      // Ekskluder alt som har med innlogging, oppretting (/new), redigering (/edit), mine hilsener, nyheter eller kategorisider å gjøre
       if (
         low.includes('/login') ||
         low.includes('/logg-inn') ||
@@ -193,6 +193,11 @@ class AmediaPersonaliaBehavior {
         low.includes('/kind/') ||
         low.includes('/new') ||
         low.includes('/edit') ||
+        low.includes('/nyheter') ||
+        low.includes('/sport') ||
+        low.includes('/kultur') ||
+        low.includes('/debatt') ||
+        low.includes('/tag/') ||
         low.endsWith('/greetings/all') ||
         low.endsWith('/vis/personalia') ||
         low.endsWith('/vis/personalia/')
@@ -207,9 +212,20 @@ class AmediaPersonaliaBehavior {
       if (idx === -1) return false;
 
       const remaining = parts.slice(idx + 1);
-      // En enkelt-hilsen lenke har nøyaktig 2 stideler etter 'greetings': <type> og <item_id> (f.eks. /greetings/birthday/5U00iEBl...)
-      if (remaining.length === 2 && remaining[0] !== 'kind' && remaining[0] !== 'new' && remaining[0] !== 'edit' && remaining[1] !== 'all') {
-        return true;
+      // En ekte enkelt-hilsen lenke har nøyaktig 2 stideler etter 'greetings': <type> og <sanity_item_id> (f.eks. /greetings/birthday/5U00iEBl...)
+      if (remaining.length === 2) {
+        const itemType = remaining[0];
+        const itemId = remaining[1];
+
+        // Sanity ID må være minst 10 tegn, ikke inneholde punktum eller domenenavn, og type må ikke være meta
+        if (
+          itemId.length >= 10 &&
+          !itemId.includes('.') &&
+          !itemType.includes('.') &&
+          !['kind', 'new', 'edit', 'all'].includes(itemType)
+        ) {
+          return true;
+        }
       }
     } catch (e) {
       return false;
