@@ -416,36 +416,51 @@ class AmediaPersonaliaBehavior {
 
     this.purgeBadLinks();
 
-    // Hent alle <a> lenker på siden
+    // Hent alle unike hilsenkort-URLer
+    const cardUrls = [];
     const allLinks = Array.from(document.querySelectorAll('a[href]'));
-    const itemCardLinks = allLinks.filter(l => this.isItemCardLink(l));
-    this.log(ctx, { msg: `Fant ${itemCardLinks.length} hilsenkort-lenker av ${allLinks.length} totale <a>-tags` });
+    for (const link of allLinks) {
+      if (this.isItemCardLink(link)) {
+        const href = link.href || "";
+        if (href && !cardUrls.includes(href)) {
+          cardUrls.push(href);
+        }
+      }
+    }
+
+    this.log(ctx, { msg: `Fant ${cardUrls.length} unike hilsenkort som skal behandles` });
 
     let clickedCount = 0;
 
-    for (const link of itemCardLinks) {
-      const href = link.href || "";
-
+    for (const href of cardUrls) {
       if (this.visitedLinks.has(href)) continue;
       this.visitedLinks.add(href);
 
       try {
-        // Scroll inn i viewport
-        link.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        await this.sleep(ctx, 200);
+        // Søk opp det levende DOM-elementet for akkurat denne hilsenen på nytt (unngår foreldede DOM-referanser)
+        const liveLink = Array.from(document.querySelectorAll('a[href]')).find(l => l.href === href || l.getAttribute('href') === href);
+        if (!liveLink) {
+          this.log(ctx, { msg: `Fant ikke levende DOM-element for URL: ${href}` });
+          continue;
+        }
+
+        // Scroll inn i viewport og vent på at rullingen har roet seg
+        liveLink.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        await this.sleep(ctx, 300);
 
         this.log(ctx, { msg: `Klikker hilsenkort #${clickedCount + 1}: ${href}` });
         
         const initialUrl = window.location.href;
 
-        // Utfør klikk uten e.preventDefault() for at React Router skal fange det opp
-        link.click();
+        // Klikk på det spesifikke hilsenkortet
+        liveLink.click();
         clickedCount++;
 
-        // Vent på at React Router / dialog oppdateres
-        await this.sleep(ctx, 350);
+        // VELDIG VIKTIG: Vent til Sanity API-kallet for denne personen har lastet og ferdigstilt renderingen
+        // Namaste henter detaljer asynkront via ix.fetch, som tar 500-1000 ms.
+        await this.sleep(ctx, 1200);
 
-        // Se etter lukkeknapper (brick-button-v9, dialog-close, aria-label="Lukk" etc.)
+        // Se etter lukkeknapper (brick-button-v9, dialog-close, aria-label="Lukk" osv.)
         const closeSelectors = [
           'brick-button-v9[data-icon-id="close"]',
           'brick-button-v9[data-icon-id="arrow-left"]',
@@ -461,30 +476,31 @@ class AmediaPersonaliaBehavior {
         for (const selector of closeSelectors) {
           const closeBtn = document.querySelector(selector);
           if (closeBtn && (closeBtn.offsetParent !== null || closeBtn.tagName.toLowerCase().startsWith('brick-'))) {
-            this.log(ctx, { msg: `Lukker med selector: ${selector}` });
+            this.log(ctx, { msg: `Lukker modal med selector: ${selector}` });
             closeBtn.click();
             closed = true;
-            await this.sleep(ctx, 250);
+            await this.sleep(ctx, 500);
             break;
           }
         }
 
         if (!closed) {
-          // Hvis URL-en endret seg via pushState, prøv history.back() for å returnere til listen
           if (window.location.href !== initialUrl) {
             this.log(ctx, { msg: "Tilbakestiller visning med window.history.back()" });
             window.history.back();
-            await this.sleep(ctx, 300);
+            await this.sleep(ctx, 500);
           } else {
-            // Fallback: ESC-tast
             this.log(ctx, { msg: "Prøver ESC-tast som fallback" });
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-            await this.sleep(ctx, 250);
+            await this.sleep(ctx, 500);
           }
         }
 
+        // Ekstra ventetid etter at modalen er lukket for at listen skal tilbakestilles rent
+        await this.sleep(ctx, 400);
+
       } catch (e) {
-        this.log(ctx, { msg: `Feil ved klikk: ${e.message}` });
+        this.log(ctx, { msg: `Feil ved klikk på ${href}: ${e.message}` });
       }
     }
 
