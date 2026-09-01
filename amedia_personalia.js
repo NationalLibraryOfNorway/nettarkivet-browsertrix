@@ -76,13 +76,37 @@ class AmediaPersonaliaBehavior {
     const fn = (ctx?.Lib?.addLink) || ctx?.addLink || (typeof self !== 'undefined' && self.__bx_addLink) || (typeof window !== 'undefined' && window.__bx_addLink);
     if (typeof fn === 'function') {
       try {
-        await fn.call(ctx, url);
+        await fn(url);
         return true;
       } catch (e) {
         console.debug('Error in addLink:', e);
       }
     }
     return false;
+  }
+
+  // Sikrer at alle oppdagede hilsenkort alltid finnes som ekte <a href="..."> i DOM-en
+  // slik at Browsertrix Crawlers innebygde outlink-innsamling (page.$$eval('a[href]')) alltid fanger dem opp 100%.
+  injectDiscoveredLinks() {
+    try {
+      let container = document.getElementById('__bx_discovered_links');
+      if (!container) {
+        container = document.createElement('div');
+        container.id = '__bx_discovered_links';
+        container.style.display = 'none';
+        (document.body || document.documentElement).appendChild(container);
+      }
+      for (const url of this.queuedUrls) {
+        if (!container.querySelector(`a[href="${url}"]`)) {
+          const a = document.createElement('a');
+          a.href = url;
+          a.textContent = url;
+          container.appendChild(a);
+        }
+      }
+    } catch (e) {
+      console.debug('Error in injectDiscoveredLinks:', e);
+    }
   }
 
   // Hjelpefunksjon for å sjekke om en lenke er et ekte hilsenkort på Amedia personalia (f.eks. ranablad.no/vis/personalia/greetings/all/...)
@@ -500,6 +524,9 @@ class AmediaPersonaliaBehavior {
 
     this.log(ctx, { msg: `Rulling fullført på ${pulses} pulses. Lagt til totalt ${this.queuedUrls.size} hilsenkort i Browsertrix-køen.` });
 
+    // Sørg for at alle oppdagede lenker er tilstede i DOM-en for Browsertrix crawler
+    this.injectDiscoveredLinks();
+
     // FASE 2: SCROLL TILBAKE TIL TOPPEN
     window.scrollTo(0, 0);
     await this.sleep(ctx, 50);
@@ -579,6 +606,9 @@ class AmediaPersonaliaBehavior {
 
     this.log(ctx, { msg: `Ferdig! Klikket totalt ${clickedCount} hilsenkort` });
     this.log(ctx, { msg: `Unike lenker lagt i kø: ${this.queuedUrls.size}` });
+
+    // Garanter at samtlige oppdagede URL-er ligger som rene <a href> i DOM-en når crawleren høster utlenker
+    this.injectDiscoveredLinks();
 
     window.scrollTo(0, docHeight());
 
