@@ -4,9 +4,9 @@ class AmediaPersonaliaBehavior {
   static runInIframe = false;
   static runInIframes = false;
 
+  // Kun rene "last mer"-knapper hvis de mot formodning finnes som klassiske knapper
   selectors = [
-    "button.lc-load-more", "button#load-more-posts", "#pagenation",
-    "brick-button-v9", "button", "a.load-more"
+    "button.lc-load-more", "button#load-more-posts", "#pagenation", "a.load-more"
   ];
 
   triggerwords = [
@@ -56,53 +56,31 @@ class AmediaPersonaliaBehavior {
     return { state, data };
   }
 
-  // Nøytraliserer og fjerner alle lenker/knapper i DOM-en som fører til /new, /login, /mygreetings
-  // slik at hverken skriptet eller Browsertrix sin lenke-uttrekker følger disse URL-ene.
+  // Nøytraliserer og fjerner helt fra DOM-en alle lenker/knapper som fører til /new, /login, /mygreetings
+  // slik at hverken et klikk eller Browsertrix sin automatiske lenke-uttrekker følger disse URL-ene.
   removeLoginAndNewLinks() {
     try {
-      const badSelectors = [
-        'a[href*="/login"]', 'a[href*="/logg-inn"]', 'a[href*="/logginn"]',
-        'a[href*="/mygreetings"]', 'a[href*="/greetings/new"]', 'a[href*="/greetings/edit"]',
-        'a[href="/vis/personalia/"]', 'a[href="/vis/personalia"]',
-        'brick-button-v9[data-linkto*="/new"]', 'brick-button-v9[data-linkto*="/login"]',
-        'brick-button-v9[data-linkto*="/mygreetings"]'
-      ];
-      
-      const elements = document.querySelectorAll(badSelectors.join(','));
-      elements.forEach(el => {
-        el.removeAttribute('href');
-        el.removeAttribute('data-linkto');
-        el.style.pointerEvents = 'none';
-        el.onclick = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          return false;
-        };
-      });
+      const allElements = document.querySelectorAll('a, button, brick-button-v9, [data-linkto], [data-linkTo]');
+      allElements.forEach(el => {
+        const href = (el.getAttribute('href') || "").toLowerCase();
+        const dataLinkto = (el.getAttribute('data-linkto') || el.getAttribute('data-linkTo') || "").toLowerCase();
+        const txt = (el.innerText || el.textContent || el.getAttribute('data-label') || "").toLowerCase();
 
-      // Nøytraliser knapper med tekst som "Ny hilsen", "Send hilsen", "Logg inn", "Mine hilsener"
-      const allInteractive = document.querySelectorAll('button, a, brick-button-v9');
-      allInteractive.forEach(btn => {
-        const txt = (btn.innerText || btn.textContent || btn.getAttribute('data-label') || "").toLowerCase();
         if (
-          txt.includes('ny hilsen') ||
-          txt.includes('send hilsen') ||
-          txt.includes('logg inn') ||
-          txt.includes('mine hilsener') ||
-          txt.includes('skriv hilsen')
+          href.includes('/login') || href.includes('/logg-inn') || href.includes('/logginn') ||
+          href.includes('/mygreetings') || href.includes('/greetings/new') || href.includes('/greetings/edit') ||
+          href.endsWith('/vis/personalia/') || href.endsWith('/vis/personalia') ||
+          dataLinkto.includes('/login') || dataLinkto.includes('/logg-inn') ||
+          dataLinkto.includes('/mygreetings') || dataLinkto.includes('/greetings/new') ||
+          dataLinkto.includes('/new') || dataLinkto.includes('/edit') ||
+          txt.includes('ny hilsen') || txt.includes('send hilsen') || txt.includes('skriv hilsen') ||
+          txt.includes('logg inn') || txt.includes('mine hilsener')
         ) {
-          btn.removeAttribute('href');
-          btn.removeAttribute('data-linkto');
-          btn.style.pointerEvents = 'none';
-          btn.onclick = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            return false;
-          };
+          el.remove(); // Fjern knappen/elementet fullstendig fra DOM-en
         }
       });
     } catch (e) {
-      console.debug('Error neutralizing login/new links:', e);
+      console.debug('Error removing login/new elements:', e);
     }
   }
 
@@ -112,7 +90,7 @@ class AmediaPersonaliaBehavior {
     try {
       const href = link.href || (link.getAttribute && link.getAttribute('href')) || "";
       const pathname = link.pathname || "";
-      const dataLinkto = (link.getAttribute && link.getAttribute('data-linkto')) || "";
+      const dataLinkto = (link.getAttribute && (link.getAttribute('data-linkto') || link.getAttribute('data-linkTo'))) || "";
 
       if (!href || typeof href !== 'string' || !href.startsWith('http')) return false;
 
@@ -299,13 +277,13 @@ class AmediaPersonaliaBehavior {
       pulses++;
       await this.sleep(ctx, cfg.waitMs);
 
-      // Klikk på eventuelle "vis flere"-knapper (også brick-button)
+      // Klikk på eventuelle "vis flere"-knapper dersom de finnes (eks. lc-load-more)
       const elems = document.querySelectorAll(this.selectors.join(","));
       let clicksThisRound = 0;
 
       for (const elem of elems) {
         const txt = (elem.innerText || elem.textContent || elem.getAttribute('data-label') || "").toLowerCase().trim();
-        const href = (elem.getAttribute('href') || elem.getAttribute('data-linkto') || "").toLowerCase();
+        const href = (elem.getAttribute('href') || elem.getAttribute('data-linkto') || elem.getAttribute('data-linkTo') || "").toLowerCase();
 
         // Hopp over innlogging / mine hilsener / send hilsen knapper
         if (
