@@ -15,7 +15,13 @@ class ScrollAndClick {
   visitedLinks = new Set();
 
   static isMatch(url) {
-    return true;
+    if (!url) return false;
+    const u = url.toLowerCase();
+    // Ikke kjør adferdsskriptet dersom måladressen er en innloggingsside eller brukerportal
+    if (u.includes('/login') || u.includes('/logg-inn') || u.includes('/logginn') || u.includes('/auth/')) {
+      return false;
+    }
+    return u.includes('/vis/personalia') || u.includes('/greetings');
   }
 
   static init() {
@@ -74,6 +80,12 @@ class ScrollAndClick {
   }
 
   async awaitPageLoad(ctx) {
+    const currentUrl = (window.location.href || "").toLowerCase();
+    if (currentUrl.includes('/login') || currentUrl.includes('/logg-inn') || currentUrl.includes('/logginn')) {
+      ctx.log({ msg: "Avbryter da gjeldende side er en innloggingsside: " + window.location.href });
+      return;
+    }
+
     this.removeConsentOverlay();
     this.fixScroll();
 
@@ -106,6 +118,12 @@ class ScrollAndClick {
   // HOVEDSLØYFE
   // ----------------------------------------------------
   async* run(ctx) {
+    const currentUrl = (window.location.href || "").toLowerCase();
+    if (currentUrl.includes('/login') || currentUrl.includes('/logg-inn') || currentUrl.includes('/logginn')) {
+      ctx.log({ msg: "Hoppet over run() da URL-en er innlogging: " + window.location.href });
+      return;
+    }
+
     await this.awaitPageLoad(ctx);
 
     const docHeight = () =>
@@ -146,6 +164,12 @@ class ScrollAndClick {
 
       for (const elem of elems) {
         const txt = (elem.innerText || elem.textContent || elem.getAttribute('data-label') || "").toLowerCase().trim();
+        const href = (elem.getAttribute('href') || elem.getAttribute('data-linkto') || "").toLowerCase();
+
+        // Hopp over innlogging / mine hilsener / send hilsen knapper
+        if (href.includes('/login') || href.includes('/logg-inn') || href.includes('/mygreetings') || href.includes('/greetings/new')) continue;
+        if (txt.includes('logg inn') || txt.includes('mine hilsener') || txt.includes('send hilsen') || txt.includes('ny hilsen')) continue;
+
         if (this.triggerwords.some(w => txt.includes(w))) {
           elem.scrollIntoView({ block: "center" });
           elem.click();
@@ -190,16 +214,37 @@ class ScrollAndClick {
     let clickedCount = 0;
 
     for (const link of allLinks) {
-      const href = link.href;
+      const href = link.href || "";
       const pathname = link.pathname || "";
+      const dataLinkto = link.getAttribute('data-linkto') || "";
 
-      // Filtrer - må være en hilsenlenke (f.eks. /greetings/ eller /vis/personalia/greetings/)
+      // Filtrer - må være en gyldig HTTP-lenke
       if (!href || !href.startsWith('http')) continue;
+
+      // Ekskluder alle innloggings-, bruker-, opprett- og redigeringslenker
+      if (
+        pathname.includes('/login') ||
+        pathname.includes('/logg-inn') ||
+        pathname.includes('/logginn') ||
+        pathname.includes('/mygreetings') ||
+        pathname.includes('/user') ||
+        pathname.includes('/auth') ||
+        pathname.includes('/greetings/new') ||
+        pathname.includes('/greetings/edit') ||
+        pathname.endsWith('/greetings/all') ||
+        pathname.endsWith('/vis/personalia/') ||
+        pathname.endsWith('/vis/personalia') ||
+        dataLinkto.includes('/login') ||
+        dataLinkto.includes('/logg-inn') ||
+        dataLinkto.includes('/mygreetings') ||
+        dataLinkto.includes('/greetings/new')
+      ) {
+        continue;
+      }
+
+      // Må gjelde en faktisk hilsen-detaljside (f.eks. /greetings/<kategori>/<id> eller /vis/personalia/greetings/<kategori>/<id>)
       if (!pathname.includes('/greetings/') && !pathname.includes('/vis/personalia/greetings/')) continue;
-      
-      // Hopp over opprett/hjem/rediger meta-lenker
-      if (pathname.includes('/greetings/new') || pathname.includes('/greetings/edit') || pathname.endsWith('/greetings/all')) continue;
-      
+
       if (this.visitedLinks.has(href)) continue;
 
       this.visitedLinks.add(href);
