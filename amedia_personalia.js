@@ -79,21 +79,22 @@ class AmediaPersonaliaBehavior {
         await fn(url);
         return true;
       } catch (e) {
-        console.debug('Error in addLink:', e);
+        this.log(ctx, { msg: `addLink feilet for ${url}: ${e.message}` });
       }
     }
     return false;
   }
 
-  // Sikrer at alle oppdagede hilsenkort alltid finnes som ekte <a href="..."> i DOM-en
-  // slik at Browsertrix Crawlers innebygde outlink-innsamling (page.$$eval('a[href]')) alltid fanger dem opp 100%.
+  // Sikrer at alle oppdagede hilsenkort alltid finnes som gyldige <a href="..."> i DOM-en
+  // slik at alle typer Browsertrix-utlenke-ekstraktorer (både synlige og rå DOM-parsere) fanger dem opp.
   injectDiscoveredLinks() {
     try {
       let container = document.getElementById('__bx_discovered_links');
       if (!container) {
         container = document.createElement('div');
         container.id = '__bx_discovered_links';
-        container.style.display = 'none';
+        container.setAttribute('aria-hidden', 'true');
+        container.style.cssText = 'position: absolute; bottom: 0; left: 0; opacity: 0.01; pointer-events: none; height: 1px; overflow: hidden; z-index: -9999;';
         (document.body || document.documentElement).appendChild(container);
       }
       for (const url of this.queuedUrls) {
