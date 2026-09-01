@@ -57,12 +57,26 @@ class AmediaPersonaliaBehavior {
     return { state, data };
   }
 
+  // Hjelpefunksjon for å hente ut en full, absolutt URL fra ethvert lenke- eller knappelement
+  extractHref(link) {
+    if (!link) return null;
+    let raw = link.href || (link.getAttribute && (link.getAttribute('href') || link.getAttribute('data-linkto') || link.getAttribute('data-linkTo'))) || "";
+    if (!raw || typeof raw !== 'string') return null;
+    raw = raw.trim();
+    if (!raw || raw === '#' || raw.startsWith('javascript:')) return null;
+    try {
+      return new URL(raw, window.location.href).href;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Legger til en URL direkte i Browsertrix Crawler sin opptakskø
-  addLink(ctx, url) {
-    const fn = (ctx?.Lib?.addLink) || ctx?.addLink || window.__bx_addLink;
+  async addLink(ctx, url) {
+    const fn = (ctx?.Lib?.addLink) || ctx?.addLink || (typeof self !== 'undefined' && self.__bx_addLink) || (typeof window !== 'undefined' && window.__bx_addLink);
     if (typeof fn === 'function') {
       try {
-        fn.call(ctx, url);
+        await fn.call(ctx, url);
         return true;
       } catch (e) {
         console.debug('Error in addLink:', e);
@@ -71,17 +85,113 @@ class AmediaPersonaliaBehavior {
     return false;
   }
 
+  // Hjelpefunksjon for å sjekke om en lenke er et ekte hilsenkort på Amedia personalia (f.eks. ranablad.no/vis/personalia/greetings/all/...)
+  isItemCardLink(link) {
+    if (!link) return false;
+    try {
+      const fullUrl = this.extractHref(link);
+      if (!fullUrl) return false;
+
+      const parsed = new URL(fullUrl);
+      
+      // Sjekk at vi er på samme domene
+      if (parsed.hostname !== window.location.hostname && !parsed.hostname.endsWith('.' + window.location.hostname)) {
+        return false;
+      }
+
+      const pathname = parsed.pathname || "";
+      const low = pathname.toLowerCase();
+
+      // Ekskluder administrative stier, innlogging, redigering og vanlige avisseksjoner
+      if (
+        low.includes('/login') ||
+        low.includes('/logg-inn') ||
+        low.includes('/logginn') ||
+        low.includes('/mygreetings') ||
+        low.includes('/mine-hilsener') ||
+        low.includes('/user') ||
+        low.includes('/auth') ||
+        low.includes('/new') ||
+        low.includes('/edit') ||
+        low.includes('/nyheter') ||
+        low.includes('/sport') ||
+        low.includes('/kultur') ||
+        low.includes('/debatt') ||
+        low.includes('/tag/')
+      ) {
+        return false;
+      }
+
+      // Må inneholde 'greetings'
+      if (!low.includes('greetings')) return false;
+
+      const parts = pathname.split('/').filter(Boolean);
+      const idx = parts.findIndex(p => p.toLowerCase() === 'greetings');
+      if (idx === -1) return false;
+
+      let remaining = parts.slice(idx + 1);
+
+      // Fjern eventuelle 'all' eller 'kind' prefikser (f.eks. /greetings/all/birthday/<id>)
+      if (remaining.length > 0 && remaining[0].toLowerCase() === 'all') {
+        remaining = remaining.slice(1);
+      }
+      if (remaining.length > 0 && remaining[0].toLowerCase() === 'kind') {
+        remaining = remaining.slice(1);
+      }
+
+      // Hvis det ikke er noen ledd igjen etter greetings/all eller greetings/kind, er det selve oversiktssiden
+      if (remaining.length === 0) return false;
+
+      const badWords = ['all', 'kind', 'new', 'ny', 'edit', 'endre', 'login', 'logginn', 'logg-inn', 'mine', 'mygreetings'];
+      const categories = ['birthday', 'bursdag', 'wedding', 'bryllup', 'giftemal', 'jubileum', 'anniversary', 'memorial', 'minneord', 'birth', 'nyfodt', 'dasp', 'gratulerer', 'general'];
+
+      // Hvis det kun er 1 ledd igjen, må det være en unik ID (ikke et nøkkelord eller en ren kategori uten ID)
+      if (remaining.length === 1) {
+        const seg = remaining[0].toLowerCase();
+        if (badWords.includes(seg) || categories.includes(seg)) {
+          return false;
+        }
+        return true;
+      }
+
+      // Hvis det er 2 eller flere ledd (f.eks. ['birthday', '5U00iEBl...']), er siste ledd ID-en
+      const lastSeg = remaining[remaining.length - 1].toLowerCase();
+      if (badWords.includes(lastSeg)) {
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Samler inn alle nye hilsenkort fra DOM-en undervegs i rullingen og sender dem til Browsertrix sin kø
-  collectAndQueueLinks(ctx) {
+  async collectAndQueueLinks(ctx) {
     let addedCount = 0;
     try {
-      const allLinks = Array.from(document.querySelectorAll('a[href]'));
-      for (const link of allLinks) {
+      const candidates = [];
+      candidates.push(...Array.from(document.querySelectorAll('a[href], [data-linkto], [data-linkTo]')));
+
+      // Inkluder også kandidater fra Shadow DOM
+      const findShadowCandidates = (root) => {
+        if (!root || !root.querySelectorAll) return [];
+        let res = [];
+        const customEls = Array.from(root.querySelectorAll('*')).filter(e => e.shadowRoot);
+        for (const c of customEls) {
+          res.push(...Array.from(c.shadowRoot.querySelectorAll('a[href], [data-linkto], [data-linkTo]')));
+          res.push(...findShadowCandidates(c.shadowRoot));
+        }
+        return res;
+      };
+      candidates.push(...findShadowCandidates(document));
+
+      for (const link of candidates) {
         if (this.isItemCardLink(link)) {
-          const href = link.href || "";
+          const href = this.extractHref(link);
           if (href && !this.queuedUrls.has(href)) {
             this.queuedUrls.add(href);
-            this.addLink(ctx, href);
+            await this.addLink(ctx, href);
             addedCount++;
           }
         }
@@ -101,16 +211,7 @@ class AmediaPersonaliaBehavior {
       const isBadUrl = (urlStr) => {
         if (!urlStr || typeof urlStr !== 'string') return false;
         const u = urlStr.toLowerCase();
-        return (
-          u.includes('/login') ||
-          u.includes('/logg-inn') ||
-          u.includes('/logginn') ||
-          u.includes('/mygreetings') ||
-          u.includes('/user') ||
-          u.includes('/auth') ||
-          u.includes('/new') ||
-          u.includes('/edit')
-        );
+        return /\/(new|edit|login|logg-inn|logginn|mygreetings|mine-hilsener|auth)(\/|$)/i.test(u);
       };
 
       const origPush = window.history.pushState;
@@ -143,14 +244,7 @@ class AmediaPersonaliaBehavior {
         if (!urlStr || typeof urlStr !== 'string') return false;
         const u = urlStr.toLowerCase();
         return (
-          u.includes('/login') ||
-          u.includes('/logg-inn') ||
-          u.includes('/logginn') ||
-          u.includes('/mygreetings') ||
-          u.includes('/user') ||
-          u.includes('/auth') ||
-          u.includes('/new') ||
-          u.includes('/edit') ||
+          /\/(new|edit|login|logg-inn|logginn|mygreetings|mine-hilsener|auth)(\/|$)/i.test(u) ||
           u.endsWith('/vis/personalia/') ||
           u.endsWith('/vis/personalia')
         );
@@ -171,7 +265,6 @@ class AmediaPersonaliaBehavior {
       const traverse = (node) => {
         if (!node) return;
         
-        // MÅ KUN SJEKKE REELLE LENKER OG KNAPPER - ALDRI BEHOLDER-DIV-ER ELLER BODY!
         const interactiveElements = node.querySelectorAll ? Array.from(node.querySelectorAll('a, button, brick-button-v9, [data-linkto], [data-linkTo]')) : [];
         
         for (const el of interactiveElements) {
@@ -204,70 +297,6 @@ class AmediaPersonaliaBehavior {
     } catch (e) {
       console.debug('Error in purgeBadLinks:', e);
     }
-  }
-
-  // Hjelpefunksjon for å sjekke om en lenke er et ekte Sanity hilsenkort
-  isItemCardLink(link) {
-    if (!link) return false;
-    try {
-      const href = link.href || (link.getAttribute && link.getAttribute('href')) || "";
-      const pathname = link.pathname || "";
-      const dataLinkto = (link.getAttribute && (link.getAttribute('data-linkto') || link.getAttribute('data-linkTo'))) || "";
-
-      if (!href || typeof href !== 'string' || !href.startsWith('http')) return false;
-
-      const low = (href + " " + pathname + " " + dataLinkto).toLowerCase();
-
-      // Ekskluder alt som har med innlogging, oppretting (/new), redigering (/edit), mine hilsener, nyheter eller kategorisider å gjøre
-      if (
-        low.includes('/login') ||
-        low.includes('/logg-inn') ||
-        low.includes('/logginn') ||
-        low.includes('/mygreetings') ||
-        low.includes('/user') ||
-        low.includes('/auth') ||
-        low.includes('/kind/') ||
-        low.includes('/new') ||
-        low.includes('/edit') ||
-        low.includes('/nyheter') ||
-        low.includes('/sport') ||
-        low.includes('/kultur') ||
-        low.includes('/debatt') ||
-        low.includes('/tag/') ||
-        low.endsWith('/greetings/all') ||
-        low.endsWith('/vis/personalia') ||
-        low.endsWith('/vis/personalia/')
-      ) {
-        return false;
-      }
-
-      if (!pathname.includes('/greetings/')) return false;
-
-      const parts = pathname.split('?')[0].split('#')[0].split('/').filter(Boolean);
-      const idx = parts.indexOf('greetings');
-      if (idx === -1) return false;
-
-      const remaining = parts.slice(idx + 1);
-      // En ekte enkelt-hilsen lenke har nøyaktig 2 stideler etter 'greetings': <type> og <sanity_item_id> (f.eks. /greetings/birthday/5U00iEBl...)
-      if (remaining.length === 2) {
-        const itemType = remaining[0];
-        const itemId = remaining[1];
-
-        // Sanity ID må være minst 10 tegn, ikke inneholde punktum eller domenenavn, og type må ikke være meta
-        if (
-          itemId.length >= 10 &&
-          !itemId.includes('.') &&
-          !itemType.includes('.') &&
-          !['kind', 'new', 'edit', 'all'].includes(itemType)
-        ) {
-          return true;
-        }
-      }
-    } catch (e) {
-      return false;
-    }
-
-    return false;
   }
 
   // ----------------------------------------------------
@@ -347,10 +376,10 @@ class AmediaPersonaliaBehavior {
       this.removeConsentOverlay();
       this.fixScroll();
       this.purgeBadLinks();
-      this.collectAndQueueLinks(ctx);
+      await this.collectAndQueueLinks(ctx);
 
-      const allLinks = Array.from(document.querySelectorAll('a[href]'));
-      const itemLinks = allLinks.filter(l => this.isItemCardLink(l));
+      const allCandidates = Array.from(document.querySelectorAll('a[href], [data-linkto], [data-linkTo]'));
+      const itemLinks = allCandidates.filter(l => this.isItemCardLink(l));
       if (itemLinks.length > 0) {
         this.log(ctx, { msg: `Namaste SPA lastet inn med ${itemLinks.length} hilsenkort etter ${elapsed} ms` });
         break;
@@ -393,8 +422,10 @@ class AmediaPersonaliaBehavior {
         document.body?.scrollHeight || 0
       );
 
-    const countGreetingCards = () =>
-      Array.from(document.querySelectorAll('a[href]')).filter(l => this.isItemCardLink(l)).length;
+    const countGreetingCards = () => {
+      const candidates = Array.from(document.querySelectorAll('a[href], [data-linkto], [data-linkTo]'));
+      return candidates.filter(l => this.isItemCardLink(l)).length;
+    };
 
     // Hastighetsoptimaliserte innstillinger for rulling
     const cfg = {
@@ -428,7 +459,7 @@ class AmediaPersonaliaBehavior {
       window.scrollTo(0, currentY);
 
       // Legg fortløpende til alle nye hilsenkort-lenker i Browsertrix sin crawler-kø!
-      const newlyAdded = this.collectAndQueueLinks(ctx);
+      const newlyAdded = await this.collectAndQueueLinks(ctx);
       if (newlyAdded > 0) {
         this.log(ctx, { msg: `Lagt til ${newlyAdded} nye hilsenkort-lenker i Browsertrix-køen (totalt i kø: ${this.queuedUrls.size})` });
       }
@@ -443,7 +474,7 @@ class AmediaPersonaliaBehavior {
       await this.sleep(ctx, delay);
 
       // Sjekk om flere hilsenkort har dukket opp etter ventetiden
-      this.collectAndQueueLinks(ctx);
+      await this.collectAndQueueLinks(ctx);
 
       // Sjekk om siden har sluttet å vokse
       const newHeight = docHeight();
@@ -484,8 +515,11 @@ class AmediaPersonaliaBehavior {
       this.visitedLinks.add(href);
 
       try {
-        // Finn levende DOM-element
-        const liveLink = Array.from(document.querySelectorAll('a[href]')).find(l => l.href === href || l.getAttribute('href') === href);
+        // Finn levende DOM-element som matcher denne URL-en
+        const candidates = [
+          ...Array.from(document.querySelectorAll('a[href], [data-linkto], [data-linkTo]'))
+        ];
+        const liveLink = candidates.find(l => this.extractHref(l) === href);
         if (!liveLink) continue;
 
         liveLink.scrollIntoView({ block: 'center', behavior: 'instant' });
