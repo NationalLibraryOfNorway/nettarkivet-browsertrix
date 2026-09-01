@@ -17,17 +17,10 @@ class AmediaPersonaliaBehavior {
   visitedLinks = new Set();
 
   static isMatch(url) {
-    try {
-      if (!url) return false;
-      const u = url.toLowerCase();
-      // Ikke kjør adferdsskriptet dersom måladressen er en innloggingsside eller brukerportal
-      if (u.includes('/login') || u.includes('/logg-inn') || u.includes('/logginn') || u.includes('/auth/')) {
-        return false;
-      }
-      return u.includes('/vis/personalia') || u.includes('/greetings');
-    } catch (e) {
-      return false;
-    }
+    // Må returnere true slik at Browsertrix sin interne `behaviors.find(b => b.isMatch(url))`
+    // alltid finner klassen og ikke feiler med TypeError (reading 'name') dersom URL er en innloggingsside/frame.
+    // Filtrering for innloggingssider håndteres trygt innvendig i run() og awaitPageLoad().
+    return true;
   }
 
   static init() {
@@ -159,7 +152,12 @@ class AmediaPersonaliaBehavior {
 
   async awaitPageLoad(ctx) {
     const currentUrl = (window.location.href || "").toLowerCase();
-    if (currentUrl.includes('/login') || currentUrl.includes('/logg-inn') || currentUrl.includes('/logginn')) {
+    if (
+      currentUrl.includes('/login') ||
+      currentUrl.includes('/logg-inn') ||
+      currentUrl.includes('/logginn') ||
+      currentUrl.includes('/auth/')
+    ) {
       this.log(ctx, { msg: "Avbryter da gjeldende side er en innloggingsside: " + window.location.href });
       return;
     }
@@ -198,7 +196,12 @@ class AmediaPersonaliaBehavior {
   // ----------------------------------------------------
   async* run(ctx) {
     const currentUrl = (window.location.href || "").toLowerCase();
-    if (currentUrl.includes('/login') || currentUrl.includes('/logg-inn') || currentUrl.includes('/logginn')) {
+    if (
+      currentUrl.includes('/login') ||
+      currentUrl.includes('/logg-inn') ||
+      currentUrl.includes('/logginn') ||
+      currentUrl.includes('/auth/')
+    ) {
       this.log(ctx, { msg: "Hoppet over run() da URL-en er innlogging: " + window.location.href });
       return;
     }
