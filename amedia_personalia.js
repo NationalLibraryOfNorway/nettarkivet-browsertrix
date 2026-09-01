@@ -370,7 +370,7 @@ class AmediaPersonaliaBehavior {
 
     // Vent på at React / Namaste SPA og Sanity API har lastet inn initialt content
     const maxWaitMs = 10000;
-    const intervalMs = 300;
+    const intervalMs = 100;
     let elapsed = 0;
 
     while (elapsed < maxWaitMs) {
@@ -393,7 +393,7 @@ class AmediaPersonaliaBehavior {
       this.log(ctx, { msg: `Venting på Namaste SPA utløp etter ${maxWaitMs} ms` });
     }
 
-    await this.sleep(ctx, 200);
+    await this.sleep(ctx, 50);
   }
 
   // ----------------------------------------------------
@@ -428,11 +428,12 @@ class AmediaPersonaliaBehavior {
       return candidates.filter(l => this.isItemCardLink(l)).length;
     };
 
-    // Hastighetsoptimaliserte innstillinger for rulling
+    // Maksimalt hastighetsoptimaliserte innstillinger for rulling
     const cfg = {
-      waitMs: 700,
-      bottomWaitMs: 1200,
-      stableLimit: 4,
+      scrollStep: 2500,
+      waitMs: 250,
+      bottomWaitMs: 600,
+      stableLimit: 3,
       maxPulses: 60,
       growthEps: 10
     };
@@ -453,8 +454,8 @@ class AmediaPersonaliaBehavior {
       const maxDocHeight = docHeight();
       const viewHeight = window.innerHeight || 800;
 
-      // Rull i 1200px jafs for raskere fremdrift
-      currentY = Math.min(currentY + 1200, maxDocHeight - viewHeight);
+      // Rull i 2500px jafs for superrask fremdrift
+      currentY = Math.min(currentY + cfg.scrollStep, maxDocHeight - viewHeight);
       if (currentY < 0) currentY = 0;
 
       window.scrollTo(0, currentY);
@@ -470,7 +471,7 @@ class AmediaPersonaliaBehavior {
 
       const isNearBottom = (currentY + viewHeight) >= (maxDocHeight - 100);
       
-      // Optimalisert ventetid: 1.2s ved bunnen for Sanity batch-fetch, ellers 0.7s
+      // Ventetid: 600ms ved bunnen for Sanity batch-fetch, ellers 250ms
       const delay = isNearBottom ? cfg.bottomWaitMs : cfg.waitMs;
       await this.sleep(ctx, delay);
 
@@ -490,7 +491,7 @@ class AmediaPersonaliaBehavior {
       lastHeight = newHeight;
       lastLinkCount = newLinkCount;
 
-      if (pulses % 3 === 0) {
+      if (pulses % 5 === 0) {
         this.log(ctx, { 
           msg: `Rullepuls ${pulses}, y: ${currentY}/${newHeight}, antall hilsenkort i DOM: ${newLinkCount}, totalt i kø: ${this.queuedUrls.size}` 
         });
@@ -501,7 +502,7 @@ class AmediaPersonaliaBehavior {
 
     // FASE 2: SCROLL TILBAKE TIL TOPPEN
     window.scrollTo(0, 0);
-    await this.sleep(ctx, 300);
+    await this.sleep(ctx, 50);
 
     this.purgeBadLinks();
 
@@ -524,7 +525,7 @@ class AmediaPersonaliaBehavior {
         if (!liveLink) continue;
 
         liveLink.scrollIntoView({ block: 'center', behavior: 'instant' });
-        await this.sleep(ctx, 100);
+        await this.sleep(ctx, 25);
 
         this.log(ctx, { msg: `Klikker hilsenkort #${clickedCount + 1}: ${href}` });
         
@@ -533,8 +534,8 @@ class AmediaPersonaliaBehavior {
         liveLink.click();
         clickedCount++;
 
-        // Optimalisert ventetid (500 ms) for at React Router og modal-detaljer skal rendres
-        await this.sleep(ctx, 500);
+        // Optimalisert ventetid (120 ms) for at React Router og modal-detaljer skal rendres
+        await this.sleep(ctx, 120);
 
         // Se etter lukkeknapper
         const closeSelectors = [
@@ -554,7 +555,7 @@ class AmediaPersonaliaBehavior {
           if (closeBtn && (closeBtn.offsetParent !== null || closeBtn.tagName.toLowerCase().startsWith('brick-'))) {
             closeBtn.click();
             closed = true;
-            await this.sleep(ctx, 200);
+            await this.sleep(ctx, 50);
             break;
           }
         }
@@ -562,14 +563,14 @@ class AmediaPersonaliaBehavior {
         if (!closed) {
           if (window.location.href !== initialUrl) {
             window.history.back();
-            await this.sleep(ctx, 200);
+            await this.sleep(ctx, 50);
           } else {
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-            await this.sleep(ctx, 200);
+            await this.sleep(ctx, 50);
           }
         }
 
-        await this.sleep(ctx, 150);
+        await this.sleep(ctx, 25);
 
       } catch (e) {
         this.log(ctx, { msg: `Feil ved klikk på ${href}: ${e.message}` });
