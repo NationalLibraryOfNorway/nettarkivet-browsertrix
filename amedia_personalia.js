@@ -102,7 +102,7 @@ class AmediaPersonaliaBehavior {
       const pathname = parsed.pathname || "";
       const low = pathname.toLowerCase();
 
-      // Ekskluder administrative stier, innlogging, redigering og vanlige avisseksjoner
+      // Ekskluder administrative stier, innlogging, redigering, kategorifiltre (/kind) og vanlige avisseksjoner
       if (
         low.includes('/login') ||
         low.includes('/logg-inn') ||
@@ -113,6 +113,7 @@ class AmediaPersonaliaBehavior {
         low.includes('/auth') ||
         low.includes('/new') ||
         low.includes('/edit') ||
+        low.includes('/kind') ||
         low.includes('/nyheter') ||
         low.includes('/sport') ||
         low.includes('/kultur') ||
@@ -131,32 +132,24 @@ class AmediaPersonaliaBehavior {
 
       let remaining = parts.slice(idx + 1);
 
-      // Fjern eventuelle 'all' eller 'kind' prefikser (f.eks. /greetings/all/birthday/<id>)
+      // Fjern eventuell 'all' prefiks (f.eks. /greetings/all/birthday/<id> eller /greetings/all/<id>)
       if (remaining.length > 0 && remaining[0].toLowerCase() === 'all') {
         remaining = remaining.slice(1);
       }
-      if (remaining.length > 0 && remaining[0].toLowerCase() === 'kind') {
-        remaining = remaining.slice(1);
-      }
 
-      // Hvis det ikke er noen ledd igjen etter greetings/all eller greetings/kind, er det selve oversiktssiden
+      // Hvis det ikke er noen ledd igjen etter greetings/all, er det selve oversiktssiden
       if (remaining.length === 0) return false;
 
-      const badWords = ['all', 'kind', 'new', 'ny', 'edit', 'endre', 'login', 'logginn', 'logg-inn', 'mine', 'mygreetings'];
-      const categories = ['birthday', 'bursdag', 'wedding', 'bryllup', 'giftemal', 'jubileum', 'anniversary', 'memorial', 'minneord', 'birth', 'nyfodt', 'dasp', 'gratulerer', 'general'];
+      const reservedWords = [
+        'all', 'kind', 'new', 'ny', 'edit', 'endre', 'login', 'logginn', 'logg-inn',
+        'mine', 'mygreetings', 'user', 'auth', 'birthday', 'bursdag', 'wedding', 'bryllup',
+        'giftemal', 'jubileum', 'anniversary', 'memorial', 'minneord', 'birth', 'nyfodt',
+        'dasp', 'gratulerer', 'general', 'obituary', 'dodsfall'
+      ];
 
-      // Hvis det kun er 1 ledd igjen, må det være en unik ID (ikke et nøkkelord eller en ren kategori uten ID)
-      if (remaining.length === 1) {
-        const seg = remaining[0].toLowerCase();
-        if (badWords.includes(seg) || categories.includes(seg)) {
-          return false;
-        }
-        return true;
-      }
-
-      // Hvis det er 2 eller flere ledd (f.eks. ['birthday', '5U00iEBl...']), er siste ledd ID-en
+      // Siste ledd er alltid hilsenens unike ID
       const lastSeg = remaining[remaining.length - 1].toLowerCase();
-      if (badWords.includes(lastSeg)) {
+      if (reservedWords.includes(lastSeg) || lastSeg.length < 5) {
         return false;
       }
 
@@ -211,7 +204,11 @@ class AmediaPersonaliaBehavior {
       const isBadUrl = (urlStr) => {
         if (!urlStr || typeof urlStr !== 'string') return false;
         const u = urlStr.toLowerCase();
-        return /\/(new|edit|login|logg-inn|logginn|mygreetings|mine-hilsener|auth)(\/|$)/i.test(u);
+        return (
+          /\/(new|edit|login|logg-inn|logginn|mygreetings|mine-hilsener|auth)(\/|$)/i.test(u) ||
+          u.includes('/kind/') ||
+          u.endsWith('/kind')
+        );
       };
 
       const origPush = window.history.pushState;
@@ -245,8 +242,12 @@ class AmediaPersonaliaBehavior {
         const u = urlStr.toLowerCase();
         return (
           /\/(new|edit|login|logg-inn|logginn|mygreetings|mine-hilsener|auth)(\/|$)/i.test(u) ||
+          u.includes('/kind/') ||
+          u.endsWith('/kind') ||
           u.endsWith('/vis/personalia/') ||
-          u.endsWith('/vis/personalia')
+          u.endsWith('/vis/personalia') ||
+          u.endsWith('/greetings/all') ||
+          u.endsWith('/greetings/all/')
         );
       };
 
