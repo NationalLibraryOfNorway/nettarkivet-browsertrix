@@ -344,8 +344,10 @@ class AmediaPersonaliaBehavior {
       Array.from(document.querySelectorAll('a[href]')).filter(l => this.isItemCardLink(l)).length;
 
     const cfg = {
-      waitMs: 1200,
-      stableLimit: 5,
+      waitMs: 1500,
+      bottomWaitMs: 2500,
+      stableLimit: 8,
+      maxPulses: 100,
       growthEps: 10
     };
 
@@ -354,76 +356,62 @@ class AmediaPersonaliaBehavior {
     let lastLinkCount = countGreetingCards();
     let stableRounds = 0;
     let pulses = 0;
+    let currentY = 0;
 
-    this.log(ctx, { msg: "Starter Scroll & Click behavior for Amedia Personalia (Namaste SPA)" });
+    this.log(ctx, { msg: "Starter grundig rulling for Amedia Personalia (Namaste SPA)..." });
 
-    // Scroll sakte nedover for å trigge infinite scroll / Sanity queries
-    while (stableRounds < cfg.stableLimit && pulses < 50) {
+    // FASE 1: RULLING - Rull grundig nedover hele siden for å laste ALT innhold fra Sanity CMS først
+    while (stableRounds < cfg.stableLimit && pulses < cfg.maxPulses) {
       this.purgeBadLinks();
 
-      const targetY = docHeight() - (window.innerHeight || 800);
-      window.scrollTo({ top: targetY > 0 ? targetY : 0, behavior: 'smooth' });
+      const maxDocHeight = docHeight();
+      const viewHeight = window.innerHeight || 800;
 
-      yield this.getState(ctx, "scrolling", { pulses, stableRounds });
+      // Rull gradvis nedover i steg på 800px
+      currentY = Math.min(currentY + 800, maxDocHeight - viewHeight);
+      if (currentY < 0) currentY = 0;
+
+      window.scrollTo({ top: currentY, behavior: 'smooth' });
+
+      yield this.getState(ctx, "scrolling", { pulses, stableRounds, currentY, maxDocHeight });
       pulses++;
-      await this.sleep(ctx, cfg.waitMs);
 
-      // Klikk på eventuelle "vis flere"-knapper dersom de finnes (eks. lc-load-more)
-      const elems = document.querySelectorAll(this.selectors.join(","));
-      let clicksThisRound = 0;
+      const isNearBottom = (currentY + viewHeight) >= (maxDocHeight - 100);
+      
+      // Hvis vi er nær bunnen, vent 2.5 sekunder slik at Sanity API rekker å returnere neste pulje med hilsener
+      const delay = isNearBottom ? cfg.bottomWaitMs : cfg.waitMs;
+      await this.sleep(ctx, delay);
 
-      for (const elem of elems) {
-        const txt = (elem.innerText || elem.textContent || elem.getAttribute('data-label') || "").toLowerCase().trim();
-        const href = (elem.getAttribute('href') || elem.getAttribute('data-linkto') || elem.getAttribute('data-linkTo') || "").toLowerCase();
+      // Sjekk om siden har sluttet å vokse
+      const newHeight = docHeight();
+      const newLinkCount = countGreetingCards();
 
-        // Hopp over innlogging / mine hilsener / send hilsen knapper
-        if (
-          href.includes('/login') || href.includes('/logg-inn') || href.includes('/mygreetings') || href.includes('/new')
-        ) continue;
-        if (
-          txt.includes('logg inn') || txt.includes('mine hilsener') || txt.includes('send hilsen') || txt.includes('ny hilsen') || txt.includes('skriv hilsen')
-        ) continue;
-
-        if (this.triggerwords.some(w => txt.includes(w))) {
-          elem.scrollIntoView({ block: "center" });
-          elem.click();
-          clicksThisRound++;
-          click++;
-          await this.sleep(ctx, 300);
-        }
-      }
-
-      if (clicksThisRound > 0) {
-        this.log(ctx, { msg: `Klikket ${clicksThisRound} "vis flere"-knapper (totalt ${click})` });
-      }
-
-      // Sjekk om siden eller antall lenker vokser
-      const currentHeight = docHeight();
-      const currentLinkCount = countGreetingCards();
-
-      if (Math.abs(currentHeight - lastHeight) < cfg.growthEps && currentLinkCount === lastLinkCount) {
+      if (Math.abs(newHeight - lastHeight) < cfg.growthEps && newLinkCount === lastLinkCount) {
         stableRounds++;
       } else {
         stableRounds = 0;
       }
-      lastHeight = currentHeight;
-      lastLinkCount = currentLinkCount;
+
+      lastHeight = newHeight;
+      lastLinkCount = newLinkCount;
 
       if (pulses % 3 === 0) {
-        this.log(ctx, { msg: `Pulse ${pulses}, høyde: ${currentHeight}, antall hilsenkort: ${currentLinkCount}, stable: ${stableRounds}` });
+        this.log(ctx, { 
+          msg: `Rullepuls ${pulses}, y: ${currentY}/${newHeight}, antall hilsenkort funnet: ${newLinkCount}, uendret på ${stableRounds}/${cfg.stableLimit} runder` 
+        });
       }
     }
 
-    this.log(ctx, { msg: `Scrolling ferdig etter ${pulses} pulses. Fant totalt ${countGreetingCards()} hilsenkort` });
+    this.log(ctx, { msg: `Rulling 100 % fullført etter ${pulses} pulses. Fant totalt ${countGreetingCards()} hilsenkort.` });
 
-    // Scroll tilbake til toppen
-    this.log(ctx, { msg: "Scroller tilbake til toppen" });
-    window.scrollTo(0, 0);
-    await this.sleep(ctx, 300);
+    // FASE 2: SCROLL TILBAKE TIL TOPPEN
+    this.log(ctx, { msg: "Scroller tilbake til toppen for å starte klikkbehandling..." });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    await this.sleep(ctx, 800);
 
     this.purgeBadLinks();
 
-    // Hent alle unike hilsenkort-URLer
+    // FASE 3: KLIKKBEHANDLING PÅ HILSENKORT (Kjører FØRST NÅ når all rulling er 100 % ferdig)
     const cardUrls = [];
     const allLinks = Array.from(document.querySelectorAll('a[href]'));
     for (const link of allLinks) {
@@ -435,7 +423,7 @@ class AmediaPersonaliaBehavior {
       }
     }
 
-    this.log(ctx, { msg: `Fant ${cardUrls.length} unike hilsenkort som skal behandles` });
+    this.log(ctx, { msg: `Rulling ferdig. Starter nå klikking på ${cardUrls.length} unike hilsenkort...` });
 
     let clickedCount = 0;
 
@@ -463,8 +451,7 @@ class AmediaPersonaliaBehavior {
         liveLink.click();
         clickedCount++;
 
-        // VELDIG VIKTIG: Vent til Sanity API-kallet for denne personen har lastet og ferdigstilt renderingen
-        // Namaste henter detaljer asynkront via ix.fetch, som tar 500-1000 ms.
+        // VELDIG VIKTIG: Vent til Sanity API-kallet for denne personen har lastet og ferdigstilt renderingen (1200 ms)
         await this.sleep(ctx, 1200);
 
         // Se etter lukkeknapper (brick-button-v9, dialog-close, aria-label="Lukk" osv.)
@@ -511,7 +498,7 @@ class AmediaPersonaliaBehavior {
       }
     }
 
-    this.log(ctx, { msg: `Ferdig! Klikket ${clickedCount} hilsenkort` });
+    this.log(ctx, { msg: `Ferdig! Klikket totalt ${clickedCount} hilsenkort` });
     this.log(ctx, { msg: `Unike lenker besøkt: ${this.visitedLinks.size}` });
 
     window.scrollTo(0, docHeight());
