@@ -99,7 +99,8 @@ class AmediaPersonaliaBehavior {
     }
   }
 
-  // Rekursiv og dyptgående fjerning av alle lenker/knapper i DOM-en og Shadow DOM som peker til /new, /login osv.
+  // Rekursiv fjerning av KUN spesifikke interaktive elementer (a, button, brick-button-v9)
+  // som peker til /new, /login osv. Beholder-elementer (som body/main/div) røres ALDRI.
   purgeBadLinks(root = document) {
     try {
       const isBadUrl = (urlStr) => {
@@ -123,24 +124,27 @@ class AmediaPersonaliaBehavior {
         if (!txtStr || typeof txtStr !== 'string') return false;
         const t = txtStr.toLowerCase().trim();
         return (
-          t.includes('ny hilsen') ||
-          t.includes('send hilsen') ||
-          t.includes('skriv hilsen') ||
-          t.includes('logg inn') ||
-          t.includes('mine hilsener')
+          t === 'ny hilsen' ||
+          t === 'send hilsen' ||
+          t === 'skriv hilsen' ||
+          t === 'logg inn' ||
+          t === 'mine hilsener'
         );
       };
 
       const traverse = (node) => {
         if (!node) return;
-        const elements = node.querySelectorAll ? Array.from(node.querySelectorAll('*')) : [];
-        for (const el of elements) {
+        
+        // MÅ KUN SJEKKE REELLE LENKER OG KNAPPER - ALDRI BEHOLDER-DIV-ER ELLER BODY!
+        const interactiveElements = node.querySelectorAll ? Array.from(node.querySelectorAll('a, button, brick-button-v9, [data-linkto], [data-linkTo]')) : [];
+        
+        for (const el of interactiveElements) {
           const href = el.getAttribute ? (el.getAttribute('href') || "") : "";
           const dataLinkto = el.getAttribute ? (el.getAttribute('data-linkto') || el.getAttribute('data-linkTo') || "") : "";
           const label = el.getAttribute ? (el.getAttribute('data-label') || "") : "";
-          const txt = el.innerText || el.textContent || label || "";
+          const txt = label || (el.innerText || el.textContent || "").trim().toLowerCase();
 
-          if (isBadUrl(href) || isBadUrl(dataLinkto) || isBadText(txt) || isBadText(label)) {
+          if (isBadUrl(href) || isBadUrl(dataLinkto) || isBadText(label) || isBadText(txt)) {
             try {
               el.remove();
             } catch (e) {
@@ -148,11 +152,14 @@ class AmediaPersonaliaBehavior {
               el.removeAttribute && el.removeAttribute('data-linkto');
               el.style && (el.style.pointerEvents = 'none');
             }
-            continue;
           }
+        }
 
-          if (el.shadowRoot) {
-            traverse(el.shadowRoot);
+        // Traverser Shadow DOM på Custom Elements dersom det finnes
+        if (node.querySelectorAll) {
+          const customEls = Array.from(node.querySelectorAll('*')).filter(e => e.shadowRoot);
+          for (const c of customEls) {
+            traverse(c.shadowRoot);
           }
         }
       };
