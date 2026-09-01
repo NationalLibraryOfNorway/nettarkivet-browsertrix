@@ -56,31 +56,110 @@ class AmediaPersonaliaBehavior {
     return { state, data };
   }
 
-  // Nøytraliserer og fjerner helt fra DOM-en alle lenker/knapper som fører til /new, /login, /mygreetings
-  // slik at hverken et klikk eller Browsertrix sin automatiske lenke-uttrekker følger disse URL-ene.
-  removeLoginAndNewLinks() {
+  // Blokkerer React Router eller JS fra å navigere til /new, /login, /mygreetings via pushState/replaceState
+  setupNavigationGuard() {
     try {
-      const allElements = document.querySelectorAll('a, button, brick-button-v9, [data-linkto], [data-linkTo]');
-      allElements.forEach(el => {
-        const href = (el.getAttribute('href') || "").toLowerCase();
-        const dataLinkto = (el.getAttribute('data-linkto') || el.getAttribute('data-linkTo') || "").toLowerCase();
-        const txt = (el.innerText || el.textContent || el.getAttribute('data-label') || "").toLowerCase();
+      if (window.__bx_navGuardSet) return;
+      window.__bx_navGuardSet = true;
 
-        if (
-          href.includes('/login') || href.includes('/logg-inn') || href.includes('/logginn') ||
-          href.includes('/mygreetings') || href.includes('/greetings/new') || href.includes('/greetings/edit') ||
-          href.endsWith('/vis/personalia/') || href.endsWith('/vis/personalia') ||
-          dataLinkto.includes('/login') || dataLinkto.includes('/logg-inn') ||
-          dataLinkto.includes('/mygreetings') || dataLinkto.includes('/greetings/new') ||
-          dataLinkto.includes('/new') || dataLinkto.includes('/edit') ||
-          txt.includes('ny hilsen') || txt.includes('send hilsen') || txt.includes('skriv hilsen') ||
-          txt.includes('logg inn') || txt.includes('mine hilsener')
-        ) {
-          el.remove(); // Fjern knappen/elementet fullstendig fra DOM-en
+      const isBadUrl = (urlStr) => {
+        if (!urlStr || typeof urlStr !== 'string') return false;
+        const u = urlStr.toLowerCase();
+        return (
+          u.includes('/login') ||
+          u.includes('/logg-inn') ||
+          u.includes('/logginn') ||
+          u.includes('/mygreetings') ||
+          u.includes('/user') ||
+          u.includes('/auth') ||
+          u.includes('/new') ||
+          u.includes('/edit')
+        );
+      };
+
+      const origPush = window.history.pushState;
+      window.history.pushState = function(state, title, url) {
+        if (isBadUrl(url ? url.toString() : '')) {
+          console.log('[Browsertrix Guard] Blokkerte pushState til:', url);
+          return;
         }
-      });
+        return origPush.apply(this, arguments);
+      };
+
+      const origReplace = window.history.replaceState;
+      window.history.replaceState = function(state, title, url) {
+        if (isBadUrl(url ? url.toString() : '')) {
+          console.log('[Browsertrix Guard] Blokkerte replaceState til:', url);
+          return;
+        }
+        return origReplace.apply(this, arguments);
+      };
     } catch (e) {
-      console.debug('Error removing login/new elements:', e);
+      console.debug('Error setting up nav guard:', e);
+    }
+  }
+
+  // Rekursiv og dyptgående fjerning av alle lenker/knapper i DOM-en og Shadow DOM som peker til /new, /login osv.
+  purgeBadLinks(root = document) {
+    try {
+      const isBadUrl = (urlStr) => {
+        if (!urlStr || typeof urlStr !== 'string') return false;
+        const u = urlStr.toLowerCase();
+        return (
+          u.includes('/login') ||
+          u.includes('/logg-inn') ||
+          u.includes('/logginn') ||
+          u.includes('/mygreetings') ||
+          u.includes('/user') ||
+          u.includes('/auth') ||
+          u.includes('/new') ||
+          u.includes('/edit') ||
+          u.endsWith('/vis/personalia/') ||
+          u.endsWith('/vis/personalia')
+        );
+      };
+
+      const isBadText = (txtStr) => {
+        if (!txtStr || typeof txtStr !== 'string') return false;
+        const t = txtStr.toLowerCase().trim();
+        return (
+          t.includes('ny hilsen') ||
+          t.includes('send hilsen') ||
+          t.includes('skriv hilsen') ||
+          t.includes('logg inn') ||
+          t.includes('mine hilsener')
+        );
+      };
+
+      const traverse = (node) => {
+        if (!node) return;
+        const elements = node.querySelectorAll ? Array.from(node.querySelectorAll('*')) : [];
+        for (const el of elements) {
+          const href = el.getAttribute ? (el.getAttribute('href') || "") : "";
+          const dataLinkto = el.getAttribute ? (el.getAttribute('data-linkto') || el.getAttribute('data-linkTo') || "") : "";
+          const label = el.getAttribute ? (el.getAttribute('data-label') || "") : "";
+          const txt = el.innerText || el.textContent || label || "";
+
+          if (isBadUrl(href) || isBadUrl(dataLinkto) || isBadText(txt) || isBadText(label)) {
+            try {
+              el.remove();
+            } catch (e) {
+              el.removeAttribute && el.removeAttribute('href');
+              el.removeAttribute && el.removeAttribute('data-linkto');
+              el.style && (el.style.pointerEvents = 'none');
+            }
+            continue;
+          }
+
+          if (el.shadowRoot) {
+            traverse(el.shadowRoot);
+          }
+        }
+      };
+
+      traverse(root);
+    } catch (e) {
+      console.debug('Error in purgeBadLinks:', e);
     }
   }
 
@@ -182,6 +261,9 @@ class AmediaPersonaliaBehavior {
   }
 
   async awaitPageLoad(ctx) {
+    this.setupNavigationGuard();
+    this.purgeBadLinks();
+
     const currentUrl = (window.location.href || "").toLowerCase();
     if (
       currentUrl.includes('/login') ||
@@ -196,7 +278,6 @@ class AmediaPersonaliaBehavior {
 
     this.removeConsentOverlay();
     this.fixScroll();
-    this.removeLoginAndNewLinks();
 
     // Vent på at React / Namaste SPA og Sanity API har lastet inn initialt content
     const maxWaitMs = 10000;
@@ -206,7 +287,7 @@ class AmediaPersonaliaBehavior {
     while (elapsed < maxWaitMs) {
       this.removeConsentOverlay();
       this.fixScroll();
-      this.removeLoginAndNewLinks();
+      this.purgeBadLinks();
 
       const allLinks = Array.from(document.querySelectorAll('a[href]'));
       const itemLinks = allLinks.filter(l => this.isItemCardLink(l));
@@ -229,6 +310,9 @@ class AmediaPersonaliaBehavior {
   // HOVEDSLØYFE
   // ----------------------------------------------------
   async* run(ctx) {
+    this.setupNavigationGuard();
+    this.purgeBadLinks();
+
     const currentUrl = (window.location.href || "").toLowerCase();
     if (
       currentUrl.includes('/login') ||
@@ -268,7 +352,7 @@ class AmediaPersonaliaBehavior {
 
     // Scroll sakte nedover for å trigge infinite scroll / Sanity queries
     while (stableRounds < cfg.stableLimit && pulses < 50) {
-      this.removeLoginAndNewLinks();
+      this.purgeBadLinks();
 
       const targetY = docHeight() - (window.innerHeight || 800);
       window.scrollTo({ top: targetY > 0 ? targetY : 0, behavior: 'smooth' });
@@ -330,7 +414,7 @@ class AmediaPersonaliaBehavior {
     window.scrollTo(0, 0);
     await this.sleep(ctx, 300);
 
-    this.removeLoginAndNewLinks();
+    this.purgeBadLinks();
 
     // Hent alle <a> lenker på siden
     const allLinks = Array.from(document.querySelectorAll('a[href]'));
