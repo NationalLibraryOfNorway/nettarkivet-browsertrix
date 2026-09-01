@@ -30,6 +30,45 @@ class ScrollAndClick {
 
   static runInIframes = false;
 
+  // Hjelpefunksjon for å sjekke om en lenke er et enkelt hilsenkort (og ikke en navigasjons/kategori/innloggingslenke)
+  isItemCardLink(link) {
+    if (!link) return false;
+    const href = link.href || "";
+    const pathname = link.pathname || "";
+
+    if (!href || !href.startsWith('http')) return false;
+
+    const low = href.toLowerCase();
+    if (
+      low.includes('/login') ||
+      low.includes('/logg-inn') ||
+      low.includes('/logginn') ||
+      low.includes('/mygreetings') ||
+      low.includes('/user') ||
+      low.includes('/auth') ||
+      low.includes('/kind/') ||
+      low.includes('/greetings/new') ||
+      low.includes('/greetings/edit') ||
+      low.endsWith('/greetings/all')
+    ) {
+      return false;
+    }
+
+    if (!pathname.includes('/greetings/')) return false;
+
+    const parts = pathname.split('?')[0].split('#')[0].split('/').filter(Boolean);
+    const idx = parts.indexOf('greetings');
+    if (idx === -1) return false;
+
+    const remaining = parts.slice(idx + 1);
+    // En enkelt-hilsen lenke har nøyaktig 2 stideler etter 'greetings': <type> og <item_id> (f.eks. /greetings/birthday/5U00iEBl...)
+    if (remaining.length === 2 && remaining[0] !== 'kind' && remaining[1] !== 'all') {
+      return true;
+    }
+
+    return false;
+  }
+
   // ----------------------------------------------------
   // CONSENT OG SCROLL FIX
   // ----------------------------------------------------
@@ -98,9 +137,10 @@ class ScrollAndClick {
       this.removeConsentOverlay();
       this.fixScroll();
 
-      const links = document.querySelectorAll('a[href*="/greetings/"]');
-      if (links.length > 0) {
-        ctx.log({ msg: `Namaste SPA lastet inn med ${links.length} initial-lenker etter ${elapsed} ms` });
+      const allLinks = Array.from(document.querySelectorAll('a[href]'));
+      const itemLinks = allLinks.filter(l => this.isItemCardLink(l));
+      if (itemLinks.length > 0) {
+        ctx.log({ msg: `Namaste SPA lastet inn med ${itemLinks.length} hilsenkort efter ${elapsed} ms` });
         break;
       }
       await ctx.Lib.sleep(intervalMs);
@@ -132,8 +172,8 @@ class ScrollAndClick {
         document.body?.scrollHeight || 0
       );
 
-    const countGreetingLinks = () =>
-      document.querySelectorAll('a[href*="/greetings/"]').length;
+    const countGreetingCards = () =>
+      Array.from(document.querySelectorAll('a[href]')).filter(l => this.isItemCardLink(l)).length;
 
     const cfg = {
       waitMs: 1200,
@@ -143,7 +183,7 @@ class ScrollAndClick {
 
     let click = 0;
     let lastHeight = docHeight();
-    let lastLinkCount = countGreetingLinks();
+    let lastLinkCount = countGreetingCards();
     let stableRounds = 0;
     let pulses = 0;
 
@@ -185,7 +225,7 @@ class ScrollAndClick {
 
       // Sjekk om siden eller antall lenker vokser
       const currentHeight = docHeight();
-      const currentLinkCount = countGreetingLinks();
+      const currentLinkCount = countGreetingCards();
 
       if (Math.abs(currentHeight - lastHeight) < cfg.growthEps && currentLinkCount === lastLinkCount) {
         stableRounds++;
@@ -196,57 +236,28 @@ class ScrollAndClick {
       lastLinkCount = currentLinkCount;
 
       if (pulses % 3 === 0) {
-        ctx.log({ msg: `Pulse ${pulses}, høyde: ${currentHeight}, antall hilsenlenker: ${currentLinkCount}, stable: ${stableRounds}` });
+        ctx.log({ msg: `Pulse ${pulses}, høyde: ${currentHeight}, antall hilsenkort: ${currentLinkCount}, stable: ${stableRounds}` });
       }
     }
 
-    ctx.log({ msg: `Scrolling ferdig etter ${pulses} pulses. Fant totalt ${countGreetingLinks()} hilsenlenker` });
+    ctx.log({ msg: `Scrolling ferdig etter ${pulses} pulses. Fant totalt ${countGreetingCards()} hilsenkort` });
 
     // Scroll tilbake til toppen
     ctx.log({ msg: "Scroller tilbake til toppen" });
     window.scrollTo(0, 0);
     await ctx.Lib.sleep(300);
 
-    // Hent alle lenker
-    const allLinks = document.querySelectorAll('a[href]');
-    ctx.log({ msg: `Fant ${allLinks.length} totale <a>-tags på siden` });
+    // Hent alle <a> lenker på siden
+    const allLinks = Array.from(document.querySelectorAll('a[href]'));
+    const itemCardLinks = allLinks.filter(l => this.isItemCardLink(l));
+    ctx.log({ msg: `Fant ${itemCardLinks.length} hilsenkort-lenker av ${allLinks.length} totale <a>-tags` });
 
     let clickedCount = 0;
 
-    for (const link of allLinks) {
+    for (const link of itemCardLinks) {
       const href = link.href || "";
-      const pathname = link.pathname || "";
-      const dataLinkto = link.getAttribute('data-linkto') || "";
-
-      // Filtrer - må være en gyldig HTTP-lenke
-      if (!href || !href.startsWith('http')) continue;
-
-      // Ekskluder alle innloggings-, bruker-, opprett- og redigeringslenker
-      if (
-        pathname.includes('/login') ||
-        pathname.includes('/logg-inn') ||
-        pathname.includes('/logginn') ||
-        pathname.includes('/mygreetings') ||
-        pathname.includes('/user') ||
-        pathname.includes('/auth') ||
-        pathname.includes('/greetings/new') ||
-        pathname.includes('/greetings/edit') ||
-        pathname.endsWith('/greetings/all') ||
-        pathname.endsWith('/vis/personalia/') ||
-        pathname.endsWith('/vis/personalia') ||
-        dataLinkto.includes('/login') ||
-        dataLinkto.includes('/logg-inn') ||
-        dataLinkto.includes('/mygreetings') ||
-        dataLinkto.includes('/greetings/new')
-      ) {
-        continue;
-      }
-
-      // Må gjelde en faktisk hilsen-detaljside (f.eks. /greetings/<kategori>/<id> eller /vis/personalia/greetings/<kategori>/<id>)
-      if (!pathname.includes('/greetings/') && !pathname.includes('/vis/personalia/greetings/')) continue;
 
       if (this.visitedLinks.has(href)) continue;
-
       this.visitedLinks.add(href);
 
       try {
@@ -254,7 +265,7 @@ class ScrollAndClick {
         link.scrollIntoView({ block: 'center', behavior: 'smooth' });
         await ctx.Lib.sleep(200);
 
-        ctx.log({ msg: `Klikker lenke #${clickedCount + 1}: ${href}` });
+        ctx.log({ msg: `Klikker hilsenkort #${clickedCount + 1}: ${href}` });
         
         const initialUrl = window.location.href;
 
@@ -290,7 +301,7 @@ class ScrollAndClick {
         }
 
         if (!closed) {
-          // Hvis URL-en endret seg, prøv history.back() for å returnere til listen
+          // Hvis URL-en endret seg via pushState, prøv history.back() for å returnere til listen
           if (window.location.href !== initialUrl) {
             ctx.log({ msg: "Tilbakestiller visning med window.history.back()" });
             window.history.back();
@@ -308,7 +319,7 @@ class ScrollAndClick {
       }
     }
 
-    ctx.log({ msg: `Ferdig! Klikket ${clickedCount} hilsenlenker av ${allLinks.length} totalt` });
+    ctx.log({ msg: `Ferdig! Klikket ${clickedCount} hilsenkort` });
     ctx.log({ msg: `Unike lenker besøkt: ${this.visitedLinks.size}` });
 
     window.scrollTo(0, docHeight());
