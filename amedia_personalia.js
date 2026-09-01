@@ -288,7 +288,7 @@ class AmediaPersonaliaBehavior {
 
     // Vent på at React / Namaste SPA og Sanity API har lastet inn initialt content
     const maxWaitMs = 10000;
-    const intervalMs = 500;
+    const intervalMs = 300;
     let elapsed = 0;
 
     while (elapsed < maxWaitMs) {
@@ -310,11 +310,11 @@ class AmediaPersonaliaBehavior {
       this.log(ctx, { msg: `Venting på Namaste SPA utløp etter ${maxWaitMs} ms` });
     }
 
-    await this.sleep(ctx, 500);
+    await this.sleep(ctx, 200);
   }
 
   // ----------------------------------------------------
-  // HOVEDSLØYFE
+  // HOVEDSLØYFE - HASTIGHETSOPTIMALISERT
   // ----------------------------------------------------
   async* run(ctx) {
     this.setupNavigationGuard();
@@ -343,11 +343,12 @@ class AmediaPersonaliaBehavior {
     const countGreetingCards = () =>
       Array.from(document.querySelectorAll('a[href]')).filter(l => this.isItemCardLink(l)).length;
 
+    // Hastighetsoptimaliserte innstillinger for rulling
     const cfg = {
-      waitMs: 1500,
-      bottomWaitMs: 2500,
-      stableLimit: 8,
-      maxPulses: 100,
+      waitMs: 700,
+      bottomWaitMs: 1200,
+      stableLimit: 4,
+      maxPulses: 60,
       growthEps: 10
     };
 
@@ -358,27 +359,27 @@ class AmediaPersonaliaBehavior {
     let pulses = 0;
     let currentY = 0;
 
-    this.log(ctx, { msg: "Starter grundig rulling for Amedia Personalia (Namaste SPA)..." });
+    this.log(ctx, { msg: "Starter hurtig-rulling for Amedia Personalia (Namaste SPA)..." });
 
-    // FASE 1: RULLING - Rull grundig nedover hele siden for å laste ALT innhold fra Sanity CMS først
+    // FASE 1: HURTIG-RULLING - Rull raskt nedover i steg på 1200px
     while (stableRounds < cfg.stableLimit && pulses < cfg.maxPulses) {
       this.purgeBadLinks();
 
       const maxDocHeight = docHeight();
       const viewHeight = window.innerHeight || 800;
 
-      // Rull gradvis nedover i steg på 800px
-      currentY = Math.min(currentY + 800, maxDocHeight - viewHeight);
+      // Rull i 1200px jafs for raskere fremdrift
+      currentY = Math.min(currentY + 1200, maxDocHeight - viewHeight);
       if (currentY < 0) currentY = 0;
 
-      window.scrollTo({ top: currentY, behavior: 'smooth' });
+      window.scrollTo(0, currentY);
 
       yield this.getState(ctx, "scrolling", { pulses, stableRounds, currentY, maxDocHeight });
       pulses++;
 
       const isNearBottom = (currentY + viewHeight) >= (maxDocHeight - 100);
       
-      // Hvis vi er nær bunnen, vent 2.5 sekunder slik at Sanity API rekker å returnere neste pulje med hilsener
+      // Optimalisert ventetid: 1.2s ved bunnen for Sanity batch-fetch, ellers 0.7s
       const delay = isNearBottom ? cfg.bottomWaitMs : cfg.waitMs;
       await this.sleep(ctx, delay);
 
@@ -397,21 +398,20 @@ class AmediaPersonaliaBehavior {
 
       if (pulses % 3 === 0) {
         this.log(ctx, { 
-          msg: `Rullepuls ${pulses}, y: ${currentY}/${newHeight}, antall hilsenkort funnet: ${newLinkCount}, uendret på ${stableRounds}/${cfg.stableLimit} runder` 
+          msg: `Rullepuls ${pulses}, y: ${currentY}/${newHeight}, antall hilsenkort: ${newLinkCount}` 
         });
       }
     }
 
-    this.log(ctx, { msg: `Rulling 100 % fullført etter ${pulses} pulses. Fant totalt ${countGreetingCards()} hilsenkort.` });
+    this.log(ctx, { msg: `Rulling fullført på ${pulses} pulses. Fant totalt ${countGreetingCards()} hilsenkort.` });
 
     // FASE 2: SCROLL TILBAKE TIL TOPPEN
-    this.log(ctx, { msg: "Scroller tilbake til toppen for å starte klikkbehandling..." });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    await this.sleep(ctx, 800);
+    window.scrollTo(0, 0);
+    await this.sleep(ctx, 300);
 
     this.purgeBadLinks();
 
-    // FASE 3: KLIKKBEHANDLING PÅ HILSENKORT (Kjører FØRST NÅ når all rulling er 100 % ferdig)
+    // FASE 3: HURTIG KLIKKBEHANDLING PÅ HILSENKORT
     const cardUrls = [];
     const allLinks = Array.from(document.querySelectorAll('a[href]'));
     for (const link of allLinks) {
@@ -423,7 +423,7 @@ class AmediaPersonaliaBehavior {
       }
     }
 
-    this.log(ctx, { msg: `Rulling ferdig. Starter nå klikking på ${cardUrls.length} unike hilsenkort...` });
+    this.log(ctx, { msg: `Rulling ferdig. Starter hurtigklikking på ${cardUrls.length} hilsenkort...` });
 
     let clickedCount = 0;
 
@@ -432,29 +432,24 @@ class AmediaPersonaliaBehavior {
       this.visitedLinks.add(href);
 
       try {
-        // Søk opp det levende DOM-elementet for akkurat denne hilsenen på nytt (unngår foreldede DOM-referanser)
+        // Finn levende DOM-element
         const liveLink = Array.from(document.querySelectorAll('a[href]')).find(l => l.href === href || l.getAttribute('href') === href);
-        if (!liveLink) {
-          this.log(ctx, { msg: `Fant ikke levende DOM-element for URL: ${href}` });
-          continue;
-        }
+        if (!liveLink) continue;
 
-        // Scroll inn i viewport og vent på at rullingen har roet seg
-        liveLink.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        await this.sleep(ctx, 300);
+        liveLink.scrollIntoView({ block: 'center', behavior: 'instant' });
+        await this.sleep(ctx, 100);
 
         this.log(ctx, { msg: `Klikker hilsenkort #${clickedCount + 1}: ${href}` });
         
         const initialUrl = window.location.href;
 
-        // Klikk på det spesifikke hilsenkortet
         liveLink.click();
         clickedCount++;
 
-        // VELDIG VIKTIG: Vent til Sanity API-kallet for denne personen har lastet og ferdigstilt renderingen (1200 ms)
-        await this.sleep(ctx, 1200);
+        // Optimalisert ventetid (500 ms) for at React Router og modal-detaljer skal rendres
+        await this.sleep(ctx, 500);
 
-        // Se etter lukkeknapper (brick-button-v9, dialog-close, aria-label="Lukk" osv.)
+        // Se etter lukkeknapper
         const closeSelectors = [
           'brick-button-v9[data-icon-id="close"]',
           'brick-button-v9[data-icon-id="arrow-left"]',
@@ -470,28 +465,24 @@ class AmediaPersonaliaBehavior {
         for (const selector of closeSelectors) {
           const closeBtn = document.querySelector(selector);
           if (closeBtn && (closeBtn.offsetParent !== null || closeBtn.tagName.toLowerCase().startsWith('brick-'))) {
-            this.log(ctx, { msg: `Lukker modal med selector: ${selector}` });
             closeBtn.click();
             closed = true;
-            await this.sleep(ctx, 500);
+            await this.sleep(ctx, 200);
             break;
           }
         }
 
         if (!closed) {
           if (window.location.href !== initialUrl) {
-            this.log(ctx, { msg: "Tilbakestiller visning med window.history.back()" });
             window.history.back();
-            await this.sleep(ctx, 500);
+            await this.sleep(ctx, 200);
           } else {
-            this.log(ctx, { msg: "Prøver ESC-tast som fallback" });
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-            await this.sleep(ctx, 500);
+            await this.sleep(ctx, 200);
           }
         }
 
-        // Ekstra ventetid etter at modalen er lukket for at listen skal tilbakestilles rent
-        await this.sleep(ctx, 400);
+        await this.sleep(ctx, 150);
 
       } catch (e) {
         this.log(ctx, { msg: `Feil ved klikk på ${href}: ${e.message}` });
