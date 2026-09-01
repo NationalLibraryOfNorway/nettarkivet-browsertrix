@@ -15,6 +15,7 @@ class AmediaPersonaliaBehavior {
   ].map(t => t.toLowerCase());
 
   visitedLinks = new Set();
+  queuedUrls = new Set();
 
   static isMatch(url) {
     // Returnerer true slik at Browsertrix crawler-rammeverk alltid finner klassen uten TypeErrors.
@@ -54,6 +55,41 @@ class AmediaPersonaliaBehavior {
       } catch (e) {}
     }
     return { state, data };
+  }
+
+  // Legger til en URL direkte i Browsertrix Crawler sin opptakskø
+  addLink(ctx, url) {
+    const fn = (ctx?.Lib?.addLink) || ctx?.addLink || window.__bx_addLink;
+    if (typeof fn === 'function') {
+      try {
+        fn.call(ctx, url);
+        return true;
+      } catch (e) {
+        console.debug('Error in addLink:', e);
+      }
+    }
+    return false;
+  }
+
+  // Samler inn alle nye hilsenkort fra DOM-en undervegs i rullingen og sender dem til Browsertrix sin kø
+  collectAndQueueLinks(ctx) {
+    let addedCount = 0;
+    try {
+      const allLinks = Array.from(document.querySelectorAll('a[href]'));
+      for (const link of allLinks) {
+        if (this.isItemCardLink(link)) {
+          const href = link.href || "";
+          if (href && !this.queuedUrls.has(href)) {
+            this.queuedUrls.add(href);
+            this.addLink(ctx, href);
+            addedCount++;
+          }
+        }
+      }
+    } catch (e) {
+      console.debug('Error in collectAndQueueLinks:', e);
+    }
+    return addedCount;
   }
 
   // Blokkerer React Router eller JS fra å navigere til /new, /login, /mygreetings via pushState/replaceState
@@ -311,6 +347,7 @@ class AmediaPersonaliaBehavior {
       this.removeConsentOverlay();
       this.fixScroll();
       this.purgeBadLinks();
+      this.collectAndQueueLinks(ctx);
 
       const allLinks = Array.from(document.querySelectorAll('a[href]'));
       const itemLinks = allLinks.filter(l => this.isItemCardLink(l));
@@ -330,7 +367,7 @@ class AmediaPersonaliaBehavior {
   }
 
   // ----------------------------------------------------
-  // HOVEDSLØYFE - HASTIGHETSOPTIMALISERT
+  // HOVEDSLØYFE - MED KØ-STRØMMING (ctx.Lib.addLink)
   // ----------------------------------------------------
   async* run(ctx) {
     this.setupNavigationGuard();
@@ -377,7 +414,7 @@ class AmediaPersonaliaBehavior {
 
     this.log(ctx, { msg: "Starter hurtig-rulling for Amedia Personalia (Namaste SPA)..." });
 
-    // FASE 1: HURTIG-RULLING - Rull raskt nedover i steg på 1200px
+    // FASE 1: HURTIG-RULLING & LENKESTRØMMING TIL BROWSERTRIX-KØ
     while (stableRounds < cfg.stableLimit && pulses < cfg.maxPulses) {
       this.purgeBadLinks();
 
@@ -390,7 +427,13 @@ class AmediaPersonaliaBehavior {
 
       window.scrollTo(0, currentY);
 
-      yield this.getState(ctx, "scrolling", { pulses, stableRounds, currentY, maxDocHeight });
+      // Legg fortløpende til alle nye hilsenkort-lenker i Browsertrix sin crawler-kø!
+      const newlyAdded = this.collectAndQueueLinks(ctx);
+      if (newlyAdded > 0) {
+        this.log(ctx, { msg: `Lagt til ${newlyAdded} nye hilsenkort-lenker i Browsertrix-køen (totalt i kø: ${this.queuedUrls.size})` });
+      }
+
+      yield this.getState(ctx, "scrolling", { pulses, stableRounds, currentY, maxDocHeight, queuedLinks: this.queuedUrls.size });
       pulses++;
 
       const isNearBottom = (currentY + viewHeight) >= (maxDocHeight - 100);
@@ -398,6 +441,9 @@ class AmediaPersonaliaBehavior {
       // Optimalisert ventetid: 1.2s ved bunnen for Sanity batch-fetch, ellers 0.7s
       const delay = isNearBottom ? cfg.bottomWaitMs : cfg.waitMs;
       await this.sleep(ctx, delay);
+
+      // Sjekk om flere hilsenkort har dukket opp etter ventetiden
+      this.collectAndQueueLinks(ctx);
 
       // Sjekk om siden har sluttet å vokse
       const newHeight = docHeight();
@@ -414,12 +460,12 @@ class AmediaPersonaliaBehavior {
 
       if (pulses % 3 === 0) {
         this.log(ctx, { 
-          msg: `Rullepuls ${pulses}, y: ${currentY}/${newHeight}, antall hilsenkort: ${newLinkCount}` 
+          msg: `Rullepuls ${pulses}, y: ${currentY}/${newHeight}, antall hilsenkort i DOM: ${newLinkCount}, totalt i kø: ${this.queuedUrls.size}` 
         });
       }
     }
 
-    this.log(ctx, { msg: `Rulling fullført på ${pulses} pulses. Fant totalt ${countGreetingCards()} hilsenkort.` });
+    this.log(ctx, { msg: `Rulling fullført på ${pulses} pulses. Lagt til totalt ${this.queuedUrls.size} hilsenkort i Browsertrix-køen.` });
 
     // FASE 2: SCROLL TILBAKE TIL TOPPEN
     window.scrollTo(0, 0);
@@ -428,18 +474,8 @@ class AmediaPersonaliaBehavior {
     this.purgeBadLinks();
 
     // FASE 3: HURTIG KLIKKBEHANDLING PÅ HILSENKORT
-    const cardUrls = [];
-    const allLinks = Array.from(document.querySelectorAll('a[href]'));
-    for (const link of allLinks) {
-      if (this.isItemCardLink(link)) {
-        const href = link.href || "";
-        if (href && !cardUrls.includes(href)) {
-          cardUrls.push(href);
-        }
-      }
-    }
-
-    this.log(ctx, { msg: `Rulling ferdig. Starter hurtigklikking på ${cardUrls.length} hilsenkort...` });
+    const cardUrls = Array.from(this.queuedUrls);
+    this.log(ctx, { msg: `Starter hurtigklikking på ${cardUrls.length} hilsenkort for MODAL/WARC snapshot-opptak...` });
 
     let clickedCount = 0;
 
@@ -506,7 +542,7 @@ class AmediaPersonaliaBehavior {
     }
 
     this.log(ctx, { msg: `Ferdig! Klikket totalt ${clickedCount} hilsenkort` });
-    this.log(ctx, { msg: `Unike lenker besøkt: ${this.visitedLinks.size}` });
+    this.log(ctx, { msg: `Unike lenker lagt i kø: ${this.queuedUrls.size}` });
 
     window.scrollTo(0, docHeight());
 
