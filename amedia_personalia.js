@@ -5,8 +5,8 @@ class AmediaPersonaliaBehavior {
   static runInIframes = false;
 
   selectors = [
-    "a", "button", "button.lc-load-more", "span[role=treeitem]",
-    "button#load-more-posts", "#pagenation", "brick-button-v9"
+    "button.lc-load-more", "button#load-more-posts", "#pagenation",
+    "brick-button-v9", "button", "a.load-more"
   ];
 
   triggerwords = [
@@ -17,9 +17,7 @@ class AmediaPersonaliaBehavior {
   visitedLinks = new Set();
 
   static isMatch(url) {
-    // Må returnere true slik at Browsertrix sin interne `behaviors.find(b => b.isMatch(url))`
-    // alltid finner klassen og ikke feiler med TypeError (reading 'name') dersom URL er en innloggingsside/frame.
-    // Filtrering for innloggingssider håndteres trygt innvendig i run() og awaitPageLoad().
+    // Returnerer true slik at Browsertrix crawler-rammeverk alltid finner klassen uten TypeErrors.
     return true;
   }
 
@@ -58,16 +56,69 @@ class AmediaPersonaliaBehavior {
     return { state, data };
   }
 
+  // Nøytraliserer og fjerner alle lenker/knapper i DOM-en som fører til /new, /login, /mygreetings
+  // slik at hverken skriptet eller Browsertrix sin lenke-uttrekker følger disse URL-ene.
+  removeLoginAndNewLinks() {
+    try {
+      const badSelectors = [
+        'a[href*="/login"]', 'a[href*="/logg-inn"]', 'a[href*="/logginn"]',
+        'a[href*="/mygreetings"]', 'a[href*="/greetings/new"]', 'a[href*="/greetings/edit"]',
+        'a[href="/vis/personalia/"]', 'a[href="/vis/personalia"]',
+        'brick-button-v9[data-linkto*="/new"]', 'brick-button-v9[data-linkto*="/login"]',
+        'brick-button-v9[data-linkto*="/mygreetings"]'
+      ];
+      
+      const elements = document.querySelectorAll(badSelectors.join(','));
+      elements.forEach(el => {
+        el.removeAttribute('href');
+        el.removeAttribute('data-linkto');
+        el.style.pointerEvents = 'none';
+        el.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          return false;
+        };
+      });
+
+      // Nøytraliser knapper med tekst som "Ny hilsen", "Send hilsen", "Logg inn", "Mine hilsener"
+      const allInteractive = document.querySelectorAll('button, a, brick-button-v9');
+      allInteractive.forEach(btn => {
+        const txt = (btn.innerText || btn.textContent || btn.getAttribute('data-label') || "").toLowerCase();
+        if (
+          txt.includes('ny hilsen') ||
+          txt.includes('send hilsen') ||
+          txt.includes('logg inn') ||
+          txt.includes('mine hilsener') ||
+          txt.includes('skriv hilsen')
+        ) {
+          btn.removeAttribute('href');
+          btn.removeAttribute('data-linkto');
+          btn.style.pointerEvents = 'none';
+          btn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+          };
+        }
+      });
+    } catch (e) {
+      console.debug('Error neutralizing login/new links:', e);
+    }
+  }
+
   // Hjelpefunksjon for å sjekke om en lenke er et enkelt hilsenkort
   isItemCardLink(link) {
     if (!link) return false;
     try {
       const href = link.href || (link.getAttribute && link.getAttribute('href')) || "";
       const pathname = link.pathname || "";
+      const dataLinkto = (link.getAttribute && link.getAttribute('data-linkto')) || "";
 
       if (!href || typeof href !== 'string' || !href.startsWith('http')) return false;
 
-      const low = href.toLowerCase();
+      const low = (href + " " + pathname + " " + dataLinkto).toLowerCase();
+
+      // Ekskluder absolutt alt som har med innlogging, oppretting (/new), redigering (/edit), mine hilsener eller kategorisider å gjøre
       if (
         low.includes('/login') ||
         low.includes('/logg-inn') ||
@@ -76,9 +127,11 @@ class AmediaPersonaliaBehavior {
         low.includes('/user') ||
         low.includes('/auth') ||
         low.includes('/kind/') ||
-        low.includes('/greetings/new') ||
-        low.includes('/greetings/edit') ||
-        low.endsWith('/greetings/all')
+        low.includes('/new') ||
+        low.includes('/edit') ||
+        low.endsWith('/greetings/all') ||
+        low.endsWith('/vis/personalia') ||
+        low.endsWith('/vis/personalia/')
       ) {
         return false;
       }
@@ -91,7 +144,7 @@ class AmediaPersonaliaBehavior {
 
       const remaining = parts.slice(idx + 1);
       // En enkelt-hilsen lenke har nøyaktig 2 stideler etter 'greetings': <type> og <item_id> (f.eks. /greetings/birthday/5U00iEBl...)
-      if (remaining.length === 2 && remaining[0] !== 'kind' && remaining[1] !== 'all') {
+      if (remaining.length === 2 && remaining[0] !== 'kind' && remaining[0] !== 'new' && remaining[0] !== 'edit' && remaining[1] !== 'all') {
         return true;
       }
     } catch (e) {
@@ -156,14 +209,16 @@ class AmediaPersonaliaBehavior {
       currentUrl.includes('/login') ||
       currentUrl.includes('/logg-inn') ||
       currentUrl.includes('/logginn') ||
-      currentUrl.includes('/auth/')
+      currentUrl.includes('/auth/') ||
+      currentUrl.includes('/new')
     ) {
-      this.log(ctx, { msg: "Avbryter da gjeldende side er en innloggingsside: " + window.location.href });
+      this.log(ctx, { msg: "Avbryter da gjeldende side er en innlogging/new side: " + window.location.href });
       return;
     }
 
     this.removeConsentOverlay();
     this.fixScroll();
+    this.removeLoginAndNewLinks();
 
     // Vent på at React / Namaste SPA og Sanity API har lastet inn initialt content
     const maxWaitMs = 10000;
@@ -173,6 +228,7 @@ class AmediaPersonaliaBehavior {
     while (elapsed < maxWaitMs) {
       this.removeConsentOverlay();
       this.fixScroll();
+      this.removeLoginAndNewLinks();
 
       const allLinks = Array.from(document.querySelectorAll('a[href]'));
       const itemLinks = allLinks.filter(l => this.isItemCardLink(l));
@@ -200,9 +256,10 @@ class AmediaPersonaliaBehavior {
       currentUrl.includes('/login') ||
       currentUrl.includes('/logg-inn') ||
       currentUrl.includes('/logginn') ||
-      currentUrl.includes('/auth/')
+      currentUrl.includes('/auth/') ||
+      currentUrl.includes('/new')
     ) {
-      this.log(ctx, { msg: "Hoppet over run() da URL-en er innlogging: " + window.location.href });
+      this.log(ctx, { msg: "Hoppet over run() da URL-en er innlogging/new: " + window.location.href });
       return;
     }
 
@@ -233,6 +290,8 @@ class AmediaPersonaliaBehavior {
 
     // Scroll sakte nedover for å trigge infinite scroll / Sanity queries
     while (stableRounds < cfg.stableLimit && pulses < 50) {
+      this.removeLoginAndNewLinks();
+
       const targetY = docHeight() - (window.innerHeight || 800);
       window.scrollTo({ top: targetY > 0 ? targetY : 0, behavior: 'smooth' });
 
@@ -249,8 +308,12 @@ class AmediaPersonaliaBehavior {
         const href = (elem.getAttribute('href') || elem.getAttribute('data-linkto') || "").toLowerCase();
 
         // Hopp over innlogging / mine hilsener / send hilsen knapper
-        if (href.includes('/login') || href.includes('/logg-inn') || href.includes('/mygreetings') || href.includes('/greetings/new')) continue;
-        if (txt.includes('logg inn') || txt.includes('mine hilsener') || txt.includes('send hilsen') || txt.includes('ny hilsen')) continue;
+        if (
+          href.includes('/login') || href.includes('/logg-inn') || href.includes('/mygreetings') || href.includes('/new')
+        ) continue;
+        if (
+          txt.includes('logg inn') || txt.includes('mine hilsener') || txt.includes('send hilsen') || txt.includes('ny hilsen') || txt.includes('skriv hilsen')
+        ) continue;
 
         if (this.triggerwords.some(w => txt.includes(w))) {
           elem.scrollIntoView({ block: "center" });
@@ -288,6 +351,8 @@ class AmediaPersonaliaBehavior {
     this.log(ctx, { msg: "Scroller tilbake til toppen" });
     window.scrollTo(0, 0);
     await this.sleep(ctx, 300);
+
+    this.removeLoginAndNewLinks();
 
     // Hent alle <a> lenker på siden
     const allLinks = Array.from(document.querySelectorAll('a[href]'));
