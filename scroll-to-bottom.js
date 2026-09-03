@@ -2,16 +2,17 @@
  * Generic Scroll-to-Bottom Behavior for Browsertrix & Web Crawling
  * 
  * - Fungerer universelt på alle typer nettsider:
- *   1. Standard sider der window / document / body scroller.
- *   2. Moderne SPA-apper (Next.js, React, Vue, Foundation, osv.) der innholdet
- *      ligger inni en intern container med overflow: auto / scroll (f.eks. NTB Mediebank).
- * - Starter øverst på siden (både for window og alle interne scroll-containere).
+ *   1. Standard nettsider (window / html / body scroll).
+ *   2. Nettsider med låst body (overflow: hidden / 100vh) - låses automatisk opp.
+ *   3. SPA-er med interne scroll-containere (React, Next.js, NTB Mediebank, Foundation, etc.).
+ * - Starter øverst på siden.
  * - Scroller jevnt nedover trinn for trinn (jevn scrolling).
- * - Trigger scroll-events for lazy-loading og virtualiserte lister.
- * - Venter ved bunnen og oppdager dynamisk lasting (infinite scroll).
+ * - Trigger scroll- og wheel-events underveis for lazy-loading og virtualiserte lister.
+ * - Håndterer infinite scroll ved å vente ved bunnen og sjekke om mer innhold lastes inn.
  */
 class ScrollToBottomBehavior {
   static id = "ScrollToBottomBehavior";
+  static name = "ScrollToBottomBehavior";
 
   static isMatch() {
     // Generisk: matcher alle nettsider
@@ -19,24 +20,53 @@ class ScrollToBottomBehavior {
   }
 
   static init() {
-    return {
-      state: {
-        scrolls: 0,
-        finished: false
-      }
-    };
+    return new ScrollToBottomBehavior();
   }
 
-  static runInIframe = true;
-  static runInIframes = true;
+  static runInIframe = false;
+  static runInIframes = false;
 
-  async awaitPageLoad() {
-    // Gi SPA-apper (React/Next.js/etc) litt tid til å hydrere DOM
+  // Lås opp scrolling dersom body/html er låst av modals, cookie-bannere eller 100vh app-shells
+  fixScroll() {
+    try {
+      if (document.body) {
+        document.body.style.setProperty('overflow', 'auto', 'important');
+        document.body.style.setProperty('overflow-y', 'auto', 'important');
+        document.body.style.setProperty('position', 'static', 'important');
+        document.body.style.setProperty('height', 'auto', 'important');
+      }
+      if (document.documentElement) {
+        document.documentElement.style.setProperty('overflow', 'auto', 'important');
+        document.documentElement.style.setProperty('overflow-y', 'auto', 'important');
+        document.documentElement.style.setProperty('position', 'static', 'important');
+        document.documentElement.style.setProperty('height', 'auto', 'important');
+      }
+
+      if (!document.getElementById('generic-scroll-fix')) {
+        const style = document.createElement('style');
+        style.id = 'generic-scroll-fix';
+        style.textContent = `
+          html, body {
+            overflow: auto !important;
+            overflow-y: auto !important;
+            position: static !important;
+            height: auto !important;
+            min-height: 100% !important;
+          }
+        `;
+        (document.head || document.documentElement).appendChild(style);
+      }
+    } catch (e) {
+      console.debug('Scroll fix error:', e);
+    }
+  }
+
+  async awaitPageLoad(ctx) {
+    this.fixScroll();
     await new Promise(r => setTimeout(r, 1000));
   }
 
   async *run(ctx) {
-    // --- Hjelpefunksjoner for Browsertrix-kompatibilitet ---
     const sleep = async (ms) => {
       const fn = (ctx?.Lib && ctx.Lib.sleep) || ctx?.sleep;
       if (typeof fn === "function") {
@@ -47,130 +77,146 @@ class ScrollToBottomBehavior {
     };
 
     const log = (msg) => {
-      if (typeof ctx?.log === "function") {
-        ctx.log(msg);
+      const fn = (ctx?.Lib && ctx.Lib.log) || ctx?.log;
+      if (typeof fn === "function") {
+        try {
+          fn.call(ctx, typeof msg === 'string' ? { msg } : msg);
+          return;
+        } catch {}
       }
-      console.log(`[ScrollToBottom] ${msg}`);
+      console.log(`[ScrollToBottom] ${typeof msg === 'string' ? msg : JSON.stringify(msg)}`);
     };
 
-    const getState = (msg, key) => {
+    const getState = (state, data) => {
       const fn = (ctx?.Lib && ctx.Lib.getState) || ctx?.getState;
       if (typeof fn === "function") {
-        if (ctx?.Lib && ctx.Lib.getState === fn) {
-          return fn(ctx, msg, key);
-        }
-        return fn.call(ctx, msg, key);
+        try {
+          return fn.call(ctx, { state, data });
+        } catch {}
       }
-      return { state: key, msg: msg };
+      return { state, data };
     };
 
-    // 1. Finn alle scrollbare elementer på siden (håndterer SPA-containere som NTB Mediebank)
-    const findScrollContainers = () => {
-      const containers = new Set();
-      
-      if (document.scrollingElement) containers.add(document.scrollingElement);
-      if (document.documentElement) containers.add(document.documentElement);
-      if (document.body) containers.add(document.body);
+    // 1. Sørg for at scroll er låst opp
+    this.fixScroll();
 
-      const allElements = document.querySelectorAll('*');
-      for (let i = 0; i < allElements.length; i++) {
-        const el = allElements[i];
-        if (!el || el === document.documentElement || el === document.body) continue;
-
-        // Må ha scrollbar-høyde større enn synlig høyde
-        if (el.scrollHeight > el.clientHeight + 15 && el.clientHeight > 40) {
-          try {
+    // 2. Finn alle scrollbare elementer i DOM (f.eks. interne containere i Next.js / NTB Mediebank)
+    const getScrollContainers = () => {
+      const containers = [];
+      try {
+        const all = document.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i];
+          if (!el || el === document.documentElement || el === document.body) continue;
+          if (el.scrollHeight > el.clientHeight + 20 && el.clientHeight > 40) {
             const style = window.getComputedStyle(el);
-            const overflowY = style.overflowY;
-            const overflow = style.overflow;
-            if (
-              overflowY === 'auto' ||
-              overflowY === 'scroll' ||
-              overflowY === 'overlay' ||
-              overflow === 'auto' ||
-              overflow === 'scroll'
-            ) {
-              containers.add(el);
+            const oy = style.overflowY;
+            const ox = style.overflow;
+            if (oy === 'auto' || oy === 'scroll' || ox === 'auto' || ox === 'scroll') {
+              containers.push(el);
             }
-          } catch {}
+          }
         }
-      }
-
-      return Array.from(containers);
+      } catch {}
+      return containers;
     };
 
-    // 2. Start øverst på siden (nullstill både window og containere)
+    // 3. Start øverst på siden
     const resetToTop = () => {
       try {
-        window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-      } catch {
         window.scrollTo(0, 0);
-      }
+      } catch {}
+      if (document.documentElement) document.documentElement.scrollTop = 0;
+      if (document.body) document.body.scrollTop = 0;
+      if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
 
-      const containers = findScrollContainers();
+      const containers = getScrollContainers();
       for (const el of containers) {
         try {
           el.scrollTop = 0;
-          el.dispatchEvent(new Event('scroll', { bubbles: true }));
         } catch {}
       }
     };
 
-    // 3. Utfør ett scroll-trinn på tvers av window og alle containere
-    const performStep = (stepSize) => {
-      let moved = false;
+    // 4. Send et hjul-event (WheelEvent) for å trigge virtuelle lister og scroll-lyttere
+    const dispatchWheel = (deltaY) => {
+      try {
+        const ev = new WheelEvent('wheel', {
+          deltaY: deltaY,
+          deltaMode: 0,
+          bubbles: true,
+          cancelable: true,
+          view: window
+        });
+        (document.scrollingElement || document.body || window).dispatchEvent(ev);
+      } catch {}
+    };
 
-      // Scroll window
-      const prevWinY = window.scrollY || window.pageYOffset || 0;
+    // 5. Utfør ett trinn med scrolling på tvers av alle metoder
+    const performScrollStep = (stepSize) => {
+      // Window & dokument scrolling
       try {
         window.scrollBy({ top: stepSize, left: 0, behavior: 'instant' });
       } catch {
         window.scrollBy(0, stepSize);
       }
-      const newWinY = window.scrollY || window.pageYOffset || 0;
-      if (Math.abs(newWinY - prevWinY) >= 1) {
-        moved = true;
+      if (document.documentElement) document.documentElement.scrollTop += stepSize;
+      if (document.body) document.body.scrollTop += stepSize;
+      if (document.scrollingElement && document.scrollingElement !== document.documentElement) {
+        document.scrollingElement.scrollTop += stepSize;
       }
 
-      // Scroll alle identifiserte containere
-      const containers = findScrollContainers();
+      // Interne containere
+      const containers = getScrollContainers();
       for (const el of containers) {
-        const prevTop = el.scrollTop;
-        el.scrollTop += stepSize;
         try {
+          el.scrollTop += stepSize;
           el.dispatchEvent(new Event('scroll', { bubbles: true }));
         } catch {}
-        if (Math.abs(el.scrollTop - prevTop) >= 1) {
-          moved = true;
-        }
       }
 
-      return { moved, containerCount: containers.length };
+      // Wheel event
+      dispatchWheel(stepSize);
     };
 
-    // 4. Beregn samlet høyde for å oppdage dynamisk vekst (infinite scroll)
-    const getCombinedHeight = () => {
-      const containers = findScrollContainers();
-      let total = Math.max(
+    // 6. Beregn samlet høyde for å oppdage dynamisk vekst (infinite scroll)
+    const getMetrics = () => {
+      const winY = window.scrollY || window.pageYOffset || document.documentElement?.scrollTop || document.body?.scrollTop || 0;
+      const winH = window.innerHeight || document.documentElement?.clientHeight || 800;
+      const docH = Math.max(
         document.documentElement?.scrollHeight || 0,
         document.body?.scrollHeight || 0,
         document.scrollingElement?.scrollHeight || 0
       );
 
+      const containers = getScrollContainers();
+      let containerMaxScroll = 0;
+      let containerCurrentScroll = 0;
       for (const el of containers) {
-        total += (el.scrollHeight || 0);
+        containerMaxScroll += (el.scrollHeight - el.clientHeight);
+        containerCurrentScroll += el.scrollTop;
       }
-      return total;
+
+      return {
+        winY,
+        winH,
+        docH,
+        isWinAtBottom: (winY + winH) >= (docH - 25),
+        containerCount: containers.length,
+        containerMaxScroll,
+        containerCurrentScroll,
+        totalHeight: docH + containerMaxScroll
+      };
     };
 
     // Konfigurasjon for jevn scrolling
     const config = {
       stepSize: 250,            // Piksler per steg (gir jevn og rolig bevegelse)
-      stepDelayMs: 80,          // Pause mellom steg i ms (gir lazy-loading tid til å registrere)
-      bottomWaitMs: 1500,       // Ventetid ved bunnen for lasting av nytt innhold
-      maxStableChecks: 4,       // Antall sjekker ved bunn uten vekst før ferdig
+      stepDelayMs: 80,          // Pause mellom steg i ms (gir lazy-loading tid til å laste)
+      bottomWaitMs: 1500,       // Ventetid ved bunnen for å hente dynamisk innhold
+      maxStableChecks: 5,       // Antall sjekker ved bunn uten vekst før ferdig
       growthThreshold: 20,      // Minimum pikselvekst for å regnes som ny sidehøyde
-      maxTotalSteps: 3500       // Maksimalt antall steg som sikkerhetsstopp
+      maxTotalSteps: 4000       // Maksimalt antall steg
     };
 
     log("Starter jevn scrolling fra toppen...");
@@ -178,70 +224,67 @@ class ScrollToBottomBehavior {
     await sleep(400);
 
     let totalSteps = 0;
-    let consecutiveNoMove = 0;
     let stableBottomRounds = 0;
-    let lastCombinedHeight = getCombinedHeight();
+    let lastMetrics = getMetrics();
 
-    yield getState("Starter jevn scrolling mot bunnen", "start");
+    yield getState("scroll_to_bottom:start", { initialHeight: lastMetrics.totalHeight });
 
-    // 5. Jevn scrolling-løkke
+    // 7. Hovedløkke for jevn scrolling
     while (stableBottomRounds < config.maxStableChecks && totalSteps < config.maxTotalSteps) {
-      const { moved, containerCount } = performStep(config.stepSize);
+      // Utfør et trinn
+      performScrollStep(config.stepSize);
       totalSteps++;
 
       await sleep(config.stepDelayMs);
 
-      if (!moved) {
-        consecutiveNoMove++;
-      } else {
-        consecutiveNoMove = 0;
-        stableBottomRounds = 0;
-      }
+      const metrics = getMetrics();
 
-      // Hvis ingen elementer lenger klarer å scrolle nedover (bunn nådd)
-      if (consecutiveNoMove >= 2) {
-        log(`Nådde antatt bunn (steg ${totalSteps}, ${containerCount} containere). Venter på dynamisk innhold...`);
-        
+      // Sjekk om vi er ved bunnen av enten vinduet eller samtlige interne containere
+      const atWindowBottom = metrics.isWinAtBottom;
+      const atContainerBottom = metrics.containerCount > 0 && (metrics.containerCurrentScroll >= metrics.containerMaxScroll - 20);
+
+      const reachedBottom = atWindowBottom || (metrics.containerCount > 0 && atContainerBottom);
+
+      if (reachedBottom && totalSteps > 5) {
+        log(`Nådde antatt bunn etter ${totalSteps} steg. Venter på dynamisk innhold...`);
+
+        // Vent og la nettverkskall / infinite scroll / lazy-loading hente mer
         await sleep(config.bottomWaitMs);
 
-        const currentCombinedHeight = getCombinedHeight();
-        const growth = currentCombinedHeight - lastCombinedHeight;
+        const newMetrics = getMetrics();
+        const growth = newMetrics.totalHeight - lastMetrics.totalHeight;
 
         if (growth > config.growthThreshold) {
-          log(`Siden/containeren utvidet seg med ${growth}px. Fortsetter scrolling...`);
+          log(`Siden/containeren utvidet seg med ${growth}px. Fortsetter rulling...`);
           stableBottomRounds = 0;
-          consecutiveNoMove = 0;
-          lastCombinedHeight = currentCombinedHeight;
+          lastMetrics = newMetrics;
         } else {
           stableBottomRounds++;
           log(`Stabilitetssjekk ved bunn: ${stableBottomRounds}/${config.maxStableChecks}`);
         }
+      } else {
+        stableBottomRounds = 0;
       }
 
-      if (totalSteps % 15 === 0) {
-        if (ctx?.state) {
-          ctx.state.scrolls = totalSteps;
-        }
-        yield getState(`Jevn scrolling: steg ${totalSteps} (containere: ${containerCount})`, "scrolls");
+      if (totalSteps % 20 === 0) {
+        yield getState("scroll_to_bottom:scrolling", {
+          steps: totalSteps,
+          scrollY: Math.round(metrics.winY),
+          containers: metrics.containerCount
+        });
       }
     }
 
-    // 6. Avsluttende rull helt til bunns for alle elementer
-    const containers = findScrollContainers();
-    for (const el of containers) {
-      try {
-        el.scrollTop = el.scrollHeight;
-        el.dispatchEvent(new Event('scroll', { bubbles: true }));
-      } catch {}
-    }
-    window.scrollTo(0, document.documentElement?.scrollHeight || 999999);
-    await sleep(500);
+    // 8. Avsluttende rull helt til bunns for sikkerhets skyld
+    performScrollStep(999999);
+    await sleep(400);
 
-    log(`Jevn scrolling fullført! Totalt ${totalSteps} steg gjennomført.`);
-    if (ctx?.state) {
-      ctx.state.finished = true;
-    }
-    yield getState(`Scrolling fullført til bunnen (${totalSteps} steg)`, "finished");
+    const finalMetrics = getMetrics();
+    log(`Jevn scrolling fullført! Totalt ${totalSteps} steg, samlet høyde: ${finalMetrics.totalHeight}px.`);
+    yield getState("scroll_to_bottom:finished", {
+      totalSteps,
+      finalHeight: finalMetrics.totalHeight
+    });
   }
 }
 
