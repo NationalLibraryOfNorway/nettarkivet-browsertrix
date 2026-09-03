@@ -53,3 +53,11 @@ Følgende scripts er tilgjengelige i dette prosjektet:
   - Ruller stabilt til bunnen av siden til høyden slutter å vokse.
   - `removeconsent_autoscroll.js` fjerner i tillegg kjente samtykke-overlays og fikser scrolling i body/html.
 
+### 7. Jevn Scroll til bunn (ScrollToBottomBehavior)
+* **Fil:** `scroll-to-bottom.js`
+* **Mål:** Generisk, ikke-sitespesifikk jevn/gradvis scrolling.
+* **Hovedfunksjonalitet:**
+  - Starter øverst på siden og scroller jevnt nedover trinn for trinn med tilpasset hastighet/intervall.
+  - Sørger for at lazy-loading og IntersectionObservers trigger underveis.
+  - Venter ved bunnen og oppdager om nytt innhold lastes inn dynamisk før den avslutter.
+
