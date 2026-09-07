@@ -1,10 +1,11 @@
 /**
  * Polaris Media Behavior for Browsertrix
  * 
- * - Finner og klikker på hoved-hamburgermenyen øverst til høyre på Polaris Media-aviser
+ * - Håndterer og lukker Sourcepoint CMP / samtykkebannere (både i iframes og hovedvindu).
+ * - Finner og klikker på hoved-hamburgermenyen på Polaris Media-aviser
  *   (Adresseavisen, Sunnmørsposten, Fædrelandsvennen, iTromsø, Harstad Tidende (ht.no), Romsdals Budstikke, m.fl.).
  * - Prefetcher, laster inn og arkiverer alle dynamiske Nuxt-komponenter (inkludert /_nuxt/pox.menu.<hash>.js)
- *   og meny-API-er (/client-api/menu/secondary) slik at menyen fungerer fullverdig i replay uten 404-feil.
+ *   og meny-API-er (/client-api/menu/secondary og /client-api/menu/primary) slik at menyen fungerer fullverdig i replay.
  * - Venter til Nuxt/Vue har ferdig-rendret alle menyelementer, underkategorier og emner i DOM-en.
  * - Samler inn og legger alle unike lenker inn i Browsertrix sin crawl-kø (ctx.Lib.addLink).
  */
@@ -21,19 +22,17 @@ class PolarisMediaBehavior {
       state: {
         clicks: 0,
         linksQueued: 0,
+        cookieBannerHandled: false,
         finished: false
       }
     };
   }
 
-  static runInIframe = false;
-  static runInIframes = false;
-
-  async awaitPageLoad(ctx) {
-    await new Promise(r => setTimeout(r, 1000));
-  }
+  static runInIframe = true;
+  static runInIframes = true;
 
   async *run(ctx) {
+    var isIframe = window.self !== window.top;
     var seenUrls = new Set();
 
     // --- Browsertrix standard hjelpefunksjoner ---
@@ -77,9 +76,49 @@ class PolarisMediaBehavior {
       return { state: key, msg: msg };
     };
 
-    // 1. Håndter eventuelle cookie-bannere som blokkerer menyen
+    // 1. Iframe-håndtering (f.eks. Sourcepoint CMP samtykkebanner)
+    if (isIframe) {
+      try {
+        var acceptBtn = document.querySelector('button.sp_choice_type_11, a.sp_choice_type_11, #onetrust-accept-btn-handler, .didomi-components-button-accept');
+        if (acceptBtn) {
+          acceptBtn.click();
+          log("Klikket på samtykkeknapp inni iframe.");
+          if (ctx && ctx.state) ctx.state.cookieBannerHandled = true;
+          yield getState("Samtykkeboks håndtert inni iframe.", "cookieBannerHandled");
+          return;
+        }
+
+        var buttons = document.querySelectorAll("button, a, [role='button']");
+        for (var i = 0; i < buttons.length; i++) {
+          var text = (buttons[i].innerText || buttons[i].textContent || "").trim().toLowerCase();
+          var aria = (buttons[i].getAttribute("aria-label") || "").toLowerCase();
+          if (
+            text.includes("godta alle") || text.includes("tillat alle") || text.includes("aksepter alle") ||
+            text === "godta" || text === "aksepter" || text === "enig" || text === "tillat" ||
+            aria.includes("godta alle") || aria.includes("accept all")
+          ) {
+            buttons[i].click();
+            log("Klikket på samtykkeknapp (" + (text || aria) + ") inni iframe.");
+            if (ctx && ctx.state) ctx.state.cookieBannerHandled = true;
+            yield getState("Samtykkeboks håndtert inni iframe.", "cookieBannerHandled");
+            return;
+          }
+        }
+      } catch (e) {}
+      return;
+    }
+
+    // 2. Hovedvindu: Rens eventuelle samtykkebannere i hoved-DOM
     var dismissCookieConsent = async function() {
       try {
+        var acceptBtn = document.querySelector('button.sp_choice_type_11, a.sp_choice_type_11, #onetrust-accept-btn-handler, .didomi-components-button-accept');
+        if (acceptBtn) {
+          acceptBtn.click();
+          log("Lukket samtykkebanner i hovedvindu.");
+          await sleep(600);
+          return true;
+        }
+
         var buttons = document.querySelectorAll("button, a, [role='button']");
         for (var i = 0; i < buttons.length; i++) {
           var btn = buttons[i];
@@ -91,7 +130,7 @@ class PolarisMediaBehavior {
             aria.includes("godta alle") || aria.includes("accept all")
           ) {
             btn.click();
-            log("Lukket samtykkebanner.");
+            log("Lukket samtykkebanner i hovedvindu.");
             await sleep(600);
             return true;
           }
@@ -102,72 +141,22 @@ class PolarisMediaBehavior {
 
     await dismissCookieConsent();
 
-    // 2. Eksplisitt hent, kjør og arkiver alle dynamiske Nuxt-komponenter og meny-API-er
-    var ensureNuxtMenuChunksAndApis = async function() {
-      var scriptElements = Array.from(document.querySelectorAll("script[src], link[href]"));
-      var hashes = new Set();
-
-      for (var i = 0; i < scriptElements.length; i++) {
-        var src = scriptElements[i].src || scriptElements[i].href || "";
-        var match = src.match(/_nuxt\/pox\.(?:[a-zA-Z0-9_\-\/]+\.)?([a-f0-9]{15,40})\.js/i);
-        if (match && match[1]) {
-          hashes.add(match[1]);
-        }
-      }
-
-      // Let også etter hasher i inline HTML/skript
+    // Hjelpefunksjon for å validere URL-er
+    var isValidCrawlLink = function(rawUrl) {
+      if (!rawUrl) return null;
       try {
-        var htmlText = document.documentElement.innerHTML;
-        var hexMatches = htmlText.match(/\"([a-f0-9]{20})\"/g) || [];
-        for (var hi = 0; hi < hexMatches.length; hi++) {
-          hashes.add(hexMatches[hi].replace(/\"/g, ""));
+        var resolved = new URL(rawUrl, window.location.href);
+        if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+          return null;
         }
-      } catch (e) {}
-
-      // Last inn og registrer meny- og søkekonponentene for alle identifiserte Webpack-hasher
-      var hashArray = Array.from(hashes);
-      var moduleTypes = ["menu", "search", "user"];
-
-      for (var h = 0; h < hashArray.length; h++) {
-        var hash = hashArray[h];
-        for (var m = 0; m < moduleTypes.length; m++) {
-          var scriptUrl = "/_nuxt/pox." + moduleTypes[m] + "." + hash + ".js";
-          try {
-            var resp = await window.fetch(scriptUrl, { credentials: "same-origin" });
-            if (resp.ok) {
-              await resp.text(); // Sikre at hele HTTP-responsen overføres og lagres i WARC
-              log("Prefetchet og arkiverte " + scriptUrl);
-            }
-          } catch (e) {}
-
-          // Injiser som script-tag og vent på at nettleseren parser den
-          if (moduleTypes[m] === "menu" || moduleTypes[m] === "search") {
-            await new Promise(function(resolve) {
-              var s = document.createElement("script");
-              s.src = scriptUrl;
-              s.onload = function() { resolve(); };
-              s.onerror = function() { resolve(); };
-              (document.head || document.documentElement).appendChild(s);
-            });
-          }
+        resolved.hash = "";
+        var cleanUrl = resolved.href;
+        if (cleanUrl.match(/\.(pdf|jpg|jpeg|png|gif|webp|svg|zip|tar|gz|mp3|mp4|avi|mov)$/i)) {
+          return null;
         }
-      }
-
-      // Hent og arkiver JSON-endepunktene for menyen
-      var apiEndpoints = [
-        "/client-api/menu/secondary",
-        "/client-api/menu/primary"
-      ];
-
-      for (var a = 0; a < apiEndpoints.length; a++) {
-        try {
-          var apiResp = await window.fetch(apiEndpoints[a], { credentials: "same-origin" });
-          if (apiResp.ok) {
-            var jsonData = await apiResp.json();
-            log("Prefetchet og arkiverte " + apiEndpoints[a]);
-            extractLinksFromJson(jsonData);
-          }
-        } catch (e) {}
+        return cleanUrl;
+      } catch (e) {
+        return null;
       }
     };
 
@@ -195,7 +184,64 @@ class PolarisMediaBehavior {
       }
     };
 
-    // 3. Finn den faktiske hovedmenyen (skiller den fra brukermeny/innlogging)
+    // 3. Eksplisitt hent, kjør og arkiver alle dynamiske Nuxt-komponenter og meny-API-er
+    var ensureNuxtMenuChunksAndApis = async function() {
+      var scriptElements = Array.from(document.querySelectorAll("script[src], link[href]"));
+      var hashes = new Set();
+
+      for (var i = 0; i < scriptElements.length; i++) {
+        var src = scriptElements[i].src || scriptElements[i].href || "";
+        var match = src.match(/_nuxt\/pox\.(?:[a-zA-Z0-9_\-\/]+\.)?([a-f0-9]{15,40})\.js/i);
+        if (match && match[1]) {
+          hashes.add(match[1]);
+        }
+      }
+
+      var hashArray = Array.from(hashes);
+      var moduleTypes = ["menu", "search"];
+
+      for (var h = 0; h < hashArray.length; h++) {
+        var hash = hashArray[h];
+        for (var m = 0; m < moduleTypes.length; m++) {
+          var scriptUrl = "/_nuxt/pox." + moduleTypes[m] + "." + hash + ".js";
+          try {
+            var resp = await window.fetch(scriptUrl, { credentials: "same-origin" });
+            if (resp.ok) {
+              await resp.text(); // Sikre at hele HTTP-responsen overføres og lagres i WARC
+              log("Prefetchet og arkiverte " + scriptUrl);
+            }
+          } catch (e) {}
+
+          // Injiser som script-tag og vent på at nettleseren parser den
+          await new Promise(function(resolve) {
+            var s = document.createElement("script");
+            s.src = scriptUrl;
+            s.onload = function() { resolve(); };
+            s.onerror = function() { resolve(); };
+            (document.head || document.documentElement).appendChild(s);
+          });
+        }
+      }
+
+      // Hent og arkiver JSON-endepunktene for menyen
+      var apiEndpoints = [
+        "/client-api/menu/secondary",
+        "/client-api/menu/primary"
+      ];
+
+      for (var a = 0; a < apiEndpoints.length; a++) {
+        try {
+          var apiResp = await window.fetch(apiEndpoints[a], { credentials: "same-origin" });
+          if (apiResp.ok) {
+            var jsonData = await apiResp.json();
+            log("Prefetchet og arkiverte " + apiEndpoints[a]);
+            extractLinksFromJson(jsonData);
+          }
+        } catch (e) {}
+      }
+    };
+
+    // 4. Finn den faktiske hovedmenyen (skiller den fra brukermeny/innlogging)
     var findMainHamburgerButton = function() {
       var allButtons = Array.from(document.querySelectorAll("button, [role='button']"));
 
@@ -244,25 +290,6 @@ class PolarisMediaBehavior {
       return null;
     };
 
-    // 4. Rens og valider URL
-    var isValidCrawlLink = function(rawUrl) {
-      if (!rawUrl) return null;
-      try {
-        var resolved = new URL(rawUrl, window.location.href);
-        if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
-          return null;
-        }
-        resolved.hash = "";
-        var cleanUrl = resolved.href;
-        if (cleanUrl.match(/\.(pdf|jpg|jpeg|png|gif|webp|svg|zip|tar|gz|mp3|mp4|avi|mov)$/i)) {
-          return null;
-        }
-        return cleanUrl;
-      } catch (e) {
-        return null;
-      }
-    };
-
     // 5. Samle inn alle lenker fra DOM-en
     var collectDomLinks = async function() {
       var added = 0;
@@ -281,7 +308,7 @@ class PolarisMediaBehavior {
     log("Laster inn og arkiverer Nuxt-menychunks og meny-API-er for replay...");
     await ensureNuxtMenuChunksAndApis();
 
-    log("Leter etter hoved-hamburgermenyen til høyre...");
+    log("Leter etter hoved-hamburgermenyen...");
     var menuBtn = findMainHamburgerButton();
 
     if (!menuBtn) {
@@ -302,7 +329,7 @@ class PolarisMediaBehavior {
     }
 
     // 6. Vent aktivt på at Nuxt/Vue ferdigstiller DOM-en (ikke bare søkefeltet)
-    var maxWaitMs = 6000;
+    var maxWaitMs = 5000;
     var waitInterval = 150;
     var elapsed = 0;
 
@@ -322,12 +349,11 @@ class PolarisMediaBehavior {
       var dr = drawers[d];
       if (dr.scrollHeight > dr.clientHeight) {
         dr.scrollTop = dr.scrollHeight;
-        await sleep(250);
+        await sleep(200);
       }
     }
 
-    // Ekstra hviletid for å garantere at all nettverkstrafikk (pox.menu.js og JSON-svarene) er 100% ferdig skrevet til WARC-filen
-    await sleep(2500);
+    await sleep(1500);
 
     // 7. Samle inn alle renderede lenker fra DOM-en
     var newlyAdded = await collectDomLinks();
@@ -340,9 +366,4 @@ class PolarisMediaBehavior {
 
     yield getState("Hamburgermeny behandlet. Totalt " + seenUrls.size + " lenker i køen.", "linksQueued");
   }
-}
-
-// Standalone støtte dersom scriptet kjøres manuelt i konsoll
-if (typeof window !== "undefined") {
-  window.PolarisMediaBehavior = PolarisMediaBehavior;
 }
