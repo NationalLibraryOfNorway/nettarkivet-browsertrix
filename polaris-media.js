@@ -3,7 +3,7 @@
  * 
  * - Finner og klikker på hoved-hamburgermenyen øverst til høyre på Polaris Media-aviser
  *   (Adresseavisen, Sunnmørsposten, Fædrelandsvennen, iTromsø, Harstad Tidende (ht.no), Romsdals Budstikke, m.fl.).
- * - Prefetcher og arkiverer alle dynamiske Nuxt-komponenter (inkludert /_nuxt/pox.menu.<hash>.js)
+ * - Prefetcher, laster inn og arkiverer alle dynamiske Nuxt-komponenter (inkludert /_nuxt/pox.menu.<hash>.js)
  *   og meny-API-er (/client-api/menu/secondary) slik at menyen fungerer fullverdig i replay uten 404-feil.
  * - Venter til Nuxt/Vue har ferdig-rendret alle menyelementer, underkategorier og emner i DOM-en.
  * - Samler inn og legger alle unike lenker inn i Browsertrix sin crawl-kø (ctx.Lib.addLink).
@@ -102,47 +102,59 @@ class PolarisMediaBehavior {
 
     await dismissCookieConsent();
 
-    // 2. Eksplisitt hent og arkiver alle dynamiske Nuxt-komponenter og meny-API-er for replay
-    var prefetchNuxtMenuChunksAndApis = async function() {
-      var scriptSrcs = Array.from(document.querySelectorAll("script[src], link[href]")).map(function(el) {
-        return el.src || el.href || "";
-      });
-
-      // Finn alle unike Webpack/Nuxt-hasher fra eksisterende skript
+    // 2. Eksplisitt hent, kjør og arkiver alle dynamiske Nuxt-komponenter og meny-API-er
+    var ensureNuxtMenuChunksAndApis = async function() {
+      var scriptElements = Array.from(document.querySelectorAll("script[src], link[href]"));
       var hashes = new Set();
-      for (var i = 0; i < scriptSrcs.length; i++) {
-        var src = scriptSrcs[i];
+
+      for (var i = 0; i < scriptElements.length; i++) {
+        var src = scriptElements[i].src || scriptElements[i].href || "";
         var match = src.match(/_nuxt\/pox\.(?:global\.|bundles\.|front\.|server-side\.)?([a-f0-9]{15,40})\.js/i);
         if (match && match[1]) {
           hashes.add(match[1]);
         }
       }
 
-      // Prefetch dynamiske Nuxt-moduler for meny, søk og bruker
-      var dynamicModules = ["menu", "search", "user", "drawer", "header"];
-      var urlsToPrefetch = [];
+      // Last inn og registrer meny- og søkekonponentene for alle identifiserte Webpack-hasher
+      var hashArray = Array.from(hashes);
+      for (var h = 0; h < hashArray.length; h++) {
+        var hash = hashArray[h];
+        var moduleTypes = ["menu", "search", "user"];
 
-      hashes.forEach(function(hash) {
-        dynamicModules.forEach(function(mod) {
-          urlsToPrefetch.push("/_nuxt/pox." + mod + "." + hash + ".js");
-        });
-      });
-
-      // API-endepunkter som leverer JSON-strukturen til menyen
-      urlsToPrefetch.push("/client-api/menu/secondary");
-      urlsToPrefetch.push("/client-api/menu/primary");
-      urlsToPrefetch.push("/client-api/menu/custom");
-
-      for (var u = 0; u < urlsToPrefetch.length; u++) {
-        var targetUrl = urlsToPrefetch[u];
-        try {
-          var res = await window.fetch(targetUrl, { credentials: "same-origin" });
-          if (res.ok) {
-            log("Arkiverte for replay: " + targetUrl);
-            if (targetUrl.includes("/client-api/")) {
-              var jsonData = await res.json();
-              extractLinksFromJson(jsonData);
+        for (var m = 0; m < moduleTypes.length; m++) {
+          var scriptUrl = "/_nuxt/pox." + moduleTypes[m] + "." + hash + ".js";
+          try {
+            var resp = await window.fetch(scriptUrl, { credentials: "same-origin" });
+            if (resp.ok) {
+              await resp.text(); // Sikre at hele HTTP-responsen overføres og lagres i WARC
+              log("Prefetchet og arkiverte " + scriptUrl);
             }
+          } catch (e) {}
+
+          // Injiser også som <script>-tag for å sikre at Webpack JSONP registrerer modulen i nettleseren
+          await new Promise(function(resolve) {
+            var s = document.createElement("script");
+            s.src = scriptUrl;
+            s.onload = function() { resolve(); };
+            s.onerror = function() { resolve(); };
+            (document.head || document.documentElement).appendChild(s);
+          });
+        }
+      }
+
+      // Hent og arkiver JSON-endepunktene for menyen
+      var apiEndpoints = [
+        "/client-api/menu/secondary",
+        "/client-api/menu/primary"
+      ];
+
+      for (var a = 0; a < apiEndpoints.length; a++) {
+        try {
+          var apiResp = await window.fetch(apiEndpoints[a], { credentials: "same-origin" });
+          if (apiResp.ok) {
+            var jsonData = await apiResp.json();
+            log("Prefetchet og arkiverte " + apiEndpoints[a]);
+            extractLinksFromJson(jsonData);
           }
         } catch (e) {}
       }
@@ -255,8 +267,8 @@ class PolarisMediaBehavior {
       return added;
     };
 
-    log("Henter og arkiverer Nuxt-menychunks og API-er for replay...");
-    await prefetchNuxtMenuChunksAndApis();
+    log("Laster inn og arkiverer Nuxt-menychunks og meny-API-er for replay...");
+    await ensureNuxtMenuChunksAndApis();
 
     log("Leter etter hoved-hamburgermenyen til høyre...");
     var menuBtn = findMainHamburgerButton();
@@ -279,13 +291,13 @@ class PolarisMediaBehavior {
     }
 
     // 6. Vent aktivt på at Nuxt/Vue ferdigstiller DOM-en (ikke bare søkefeltet)
-    var maxWaitMs = 5000;
+    var maxWaitMs = 6000;
     var waitInterval = 150;
     var elapsed = 0;
 
     while (elapsed < maxWaitMs) {
       var renderedItems = document.querySelectorAll(".menu-item, .menu-sub-item, .menu-with-title, [class*='menu-item']");
-      if (renderedItems.length >= 6) {
+      if (renderedItems.length >= 5) {
         log("Hamburgermenyen er ferdig rendret med " + renderedItems.length + " elementer (etter " + elapsed + " ms).");
         break;
       }
@@ -303,8 +315,8 @@ class PolarisMediaBehavior {
       }
     }
 
-    // Ekstra hviletid for å sikre at alle bakgrunnsforespørsler (pox.menu.js og API-er) er ferdig skrevet til WARC
-    await sleep(2000);
+    // Ekstra hviletid for å garantere at all nettverkstrafikk (pox.menu.js og JSON-svarene) er 100% ferdig skrevet til WARC-filen
+    await sleep(2500);
 
     // 7. Samle inn alle renderede lenker fra DOM-en
     var newlyAdded = await collectDomLinks();
