@@ -1,11 +1,11 @@
 /**
  * Polaris Media Behavior for Browsertrix
  * 
- * - Finner og klikker på hamburgermenyen øverst til høyre på Polaris Media-aviser
- *   (f.eks. Adresseavisen (adressa.no), Sunnmørsposten (smp.no), Fædrelandsvennen (fvn.no),
- *   iTromsø (itromso.no), Romsdals Budstikke (rbnett.no), Harstad Tidende (harstadtidende.no), m.fl.).
- * - Åpner menyen og samler inn alle kategorier, emner, underseksjoner og interne lenker som avdekkes.
- * - Sender lenkene direkte til Browsertrix sin crawl-kø (ctx.Lib.addLink).
+ * - Finner og klikker på hoved-hamburgermenyen øverst til høyre på Polaris Media-aviser
+ *   (Adresseavisen, Sunnmørsposten, Fædrelandsvennen, iTromsø, Romsdals Budstikke, Harstad Tidende, m.fl.).
+ * - Trigger og tar opp API-kallet (/client-api/menu/secondary) i WARC-arkivet slik at menyen fungerer i replay.
+ * - Venter til Nuxt/Vue har ferdig-rendret alle menyelementer, underkategorier og emner i DOM-en.
+ * - Samler inn og legger alle unike lenker inn i Browsertrix sin crawl-kø (ctx.Lib.addLink).
  */
 class PolarisMediaBehavior {
   static id = "PolarisMediaBehavior";
@@ -101,169 +101,194 @@ class PolarisMediaBehavior {
 
     await dismissCookieConsent();
 
-    // 2. Finn hoved-hamburgermenyknappen øverst til høyre
-    var findHamburgerButton = function() {
-      // 1. Prioriter spesifikke Polaris Media hovedmeny-selektorer
-      var specific = document.querySelector(
-        "button.menu-icon.main, button.main.menu-icon, button[aria-label*='Åpne- og lukkeknapp for meny' i]"
-      );
-      if (specific) return specific;
+    // 2. Eksplisitt hent meny-API-et slik at proxyen garantert tar det opp i WARC-en for replay
+    var prefetchMenuApi = async function() {
+      var apiEndpoints = [
+        "/client-api/menu/secondary",
+        "/client-api/menu/primary"
+      ];
+      for (var i = 0; i < apiEndpoints.length; i++) {
+        try {
+          var res = await window.fetch(apiEndpoints[i], { credentials: "same-origin" });
+          if (res.ok) {
+            var data = await res.json();
+            log("Prefetchet og arkiverte " + apiEndpoints[i] + " for replay.");
+            // Ekstraher også lenker direkte fra JSON-strukturen
+            extractLinksFromJson(data);
+          }
+        } catch (e) {}
+      }
+    };
 
-      // 2. Søk etter menyknapper som IKKE er brukermeny (.user / Brukermeny)
-      var nonUser = document.querySelector("button.menu-icon:not(.user), button:not(.user)[class*='menu-icon']");
-      if (nonUser) return nonUser;
+    // Hjelpefunksjon for å hente ut alle URL-er fra Polaris Media JSON-menystruktur
+    var extractLinksFromJson = function(obj) {
+      if (!obj) return;
+      if (Array.isArray(obj)) {
+        for (var i = 0; i < obj.length; i++) {
+          extractLinksFromJson(obj[i]);
+        }
+      } else if (typeof obj === "object") {
+        if (obj.url && typeof obj.url === "string") {
+          var clean = isValidCrawlLink(obj.url);
+          if (clean && !seenUrls.has(clean)) {
+            seenUrls.add(clean);
+            addLink(clean);
+          }
+        }
+        if (obj.list && Array.isArray(obj.list)) {
+          extractLinksFromJson(obj.list);
+        }
+        if (obj.items && Array.isArray(obj.items)) {
+          extractLinksFromJson(obj.items);
+        }
+      }
+    };
 
-      // 3. Generisk søk etter meny-knapper i headeren plassert lengst til høyre
-      var candidates = Array.from(document.querySelectorAll("button, a, [role='button']"));
-      var rightSideMenuButtons = [];
+    // 3. Finn den faktiske hovedmenyen (skiller den fra brukermeny/innlogging)
+    var findMainHamburgerButton = function() {
+      var allButtons = Array.from(document.querySelectorAll("button, [role='button']"));
 
-      for (var i = 0; i < candidates.length; i++) {
-        var el = candidates[i];
-        var aria = (el.getAttribute("aria-label") || "").toLowerCase();
+      // Prioritet 1: Knapp med klassene 'main' og 'menu-icon'
+      var mainMenuBtn = allButtons.find(function(b) {
+        return b.classList && b.classList.contains("main") && b.classList.contains("menu-icon");
+      });
+      if (mainMenuBtn) return mainMenuBtn;
+
+      // Prioritet 2: Aria-label 'Åpne- og lukkeknapp for meny'
+      var ariaBtn = allButtons.find(function(b) {
+        var aria = (b.getAttribute("aria-label") || "").toLowerCase();
+        return aria.includes("åpne- og lukkeknapp") || (aria.includes("meny") && !aria.includes("bruker"));
+      });
+      if (ariaBtn) return ariaBtn;
+
+      // Prioritet 3: Menu-icon som IKKE er brukermeny
+      var nonUserBtn = allButtons.find(function(b) {
+        var isMenu = b.classList && b.classList.contains("menu-icon");
+        var isUser = b.classList && (b.classList.contains("user") || b.classList.contains("profile"));
+        return isMenu && !isUser;
+      });
+      if (nonUserBtn) return nonUserBtn;
+
+      // Prioritet 4: Høyre-plassert menyknapp i headeren
+      var headerCandidates = [];
+      for (var i = 0; i < allButtons.length; i++) {
+        var el = allButtons[i];
         var cls = (el.className || "").toString().toLowerCase();
-        var txt = (el.innerText || el.textContent || "").trim().toLowerCase();
-
-        // Ignorer innlogging/profil/brukermeny
+        var aria = (el.getAttribute("aria-label") || "").toLowerCase();
         if (cls.includes("user") || aria.includes("bruker") || aria.includes("profil") || aria.includes("login")) {
           continue;
         }
-
-        var isMenuRelated = (
-          cls.includes("menu-icon") ||
-          cls.includes("hamburger") ||
-          cls.includes("nav-toggle") ||
-          cls.includes("menu-button") ||
-          aria.includes("meny") ||
-          aria.includes("menu") ||
-          txt === "meny" ||
-          txt === "menu"
-        );
-
-        if (isMenuRelated) {
+        if (cls.includes("menu") || cls.includes("hamburger") || cls.includes("nav-toggle") || aria.includes("menu") || aria.includes("meny")) {
           var rect = el.getBoundingClientRect();
-          // Knapp i headeren (øverste 250px)
           if (rect.width > 0 && rect.height > 0 && rect.y < 250) {
-            rightSideMenuButtons.push({ element: el, x: rect.x + rect.width });
+            headerCandidates.push({ el: el, x: rect.x + rect.width });
           }
         }
       }
-
-      // Sorter etter høyeste x-koordinat (lengst til høyre i headeren)
-      if (rightSideMenuButtons.length > 0) {
-        rightSideMenuButtons.sort((a, b) => b.x - a.x);
-        return rightSideMenuButtons[0].element;
+      if (headerCandidates.length > 0) {
+        headerCandidates.sort(function(a, b) { return b.x - a.x; });
+        return headerCandidates[0].el;
       }
 
       return null;
     };
 
-    // 3. Sjekk og rens en URL for innhøsting
+    // 4. Rens og valider URL
     var isValidCrawlLink = function(rawUrl) {
       if (!rawUrl) return null;
       try {
         var resolved = new URL(rawUrl, window.location.href);
-        // Kun http og https
         if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
           return null;
         }
-        // Fjern hash (#...)
         resolved.hash = "";
         var cleanUrl = resolved.href;
-
-        // Ignorer statiske mediefiler
         if (cleanUrl.match(/\.(pdf|jpg|jpeg|png|gif|webp|svg|zip|tar|gz|mp3|mp4|avi|mov)$/i)) {
           return null;
         }
-
         return cleanUrl;
       } catch (e) {
         return null;
       }
     };
 
-    // 4. Samle inn alle lenker i meny-beholderen og DOM
-    var collectMenuLinks = async function() {
-      var addedCount = 0;
-      var menuSelectors = [
-        ".menu-item a",
-        ".menu-sub-item a",
-        ".menu-with-title a",
-        "[class*='menu-container'] a",
-        "[class*='main-menu'] a",
-        "[class*='drawer'] a",
-        "[class*='sidebar'] a",
-        "nav a",
-        "aside a",
-        "[role='navigation'] a",
-        "[role='dialog'] a"
-      ];
-
-      var anchorElements = Array.from(document.querySelectorAll(menuSelectors.join(", ")));
-
-      // Fallback dersom spesifikke containere mangler: finn alle synlige <a> i DOM
-      if (anchorElements.length === 0) {
-        anchorElements = Array.from(document.querySelectorAll("a[href]"));
-      }
-
-      for (var i = 0; i < anchorElements.length; i++) {
-        var a = anchorElements[i];
-        var validUrl = isValidCrawlLink(a.getAttribute("href") || a.href);
-
-        if (validUrl && !seenUrls.has(validUrl)) {
-          seenUrls.add(validUrl);
-          await addLink(validUrl);
-          addedCount++;
+    // 5. Samle inn alle lenker fra DOM-en
+    var collectDomLinks = async function() {
+      var added = 0;
+      var anchors = Array.from(document.querySelectorAll("a[href]"));
+      for (var i = 0; i < anchors.length; i++) {
+        var clean = isValidCrawlLink(anchors[i].getAttribute("href") || anchors[i].href);
+        if (clean && !seenUrls.has(clean)) {
+          seenUrls.add(clean);
+          await addLink(clean);
+          added++;
         }
       }
-
-      return addedCount;
+      return added;
     };
 
-    log("Leter etter hamburgermenyen til høyre...");
-    var menuBtn = findHamburgerButton();
+    log("Henter og arkiverer meny-API-er for replay-støtte...");
+    await prefetchMenuApi();
+
+    log("Leter etter hoved-hamburgermenyen til høyre...");
+    var menuBtn = findMainHamburgerButton();
 
     if (!menuBtn) {
-      log("Fant ikke hamburgermeny-knapp. Samler generelle navigasjonslenker som fallback.");
-      var fallbackAdded = await collectMenuLinks();
+      log("Fant ikke hamburgermeny-knapp. Samler inn eksisterende navigasjonslenker.");
+      var fallbackCount = await collectDomLinks();
       if (ctx && ctx.state) {
-        ctx.state.linksQueued = fallbackAdded;
+        ctx.state.linksQueued = seenUrls.size;
         ctx.state.finished = true;
       }
-      yield getState("Fullført: " + fallbackAdded + " lenker samlet (uten meny-knapp)", "linksQueued");
+      yield getState("Fullført uten menyknapp (" + seenUrls.size + " lenker i kø)", "linksQueued");
       return;
     }
 
-    log("Fant hamburgermeny-knapp (" + (menuBtn.className || menuBtn.getAttribute("aria-label") || menuBtn.tagName) + "). Klikker for å åpne...");
+    log("Klikker på hamburgermeny (" + (menuBtn.className || menuBtn.getAttribute("aria-label")) + ")...");
     menuBtn.click();
     if (ctx && ctx.state) {
       ctx.state.clicks++;
     }
 
-    // Vent på at meny-animasjon og innhold lastes inn
-    await sleep(1000);
+    // 6. Vent aktivt på at Nuxt/Vue rendrer alle seksjoner og kategorier i menyen (ikke bare søkefeltet)
+    var maxWaitMs = 5000;
+    var waitInterval = 150;
+    var elapsed = 0;
 
-    // Rull eventuelt nedover inni meny-containeren dersom den har eget scrollfelt
-    var scrollableDrawers = document.querySelectorAll(
-      "[class*='menu-container'], [class*='main-menu'], [class*='drawer'], [class*='sidebar'], nav, aside"
-    );
-    for (var d = 0; d < scrollableDrawers.length; d++) {
-      var drawer = scrollableDrawers[d];
-      if (drawer.scrollHeight > drawer.clientHeight) {
-        drawer.scrollTop = drawer.scrollHeight;
-        await sleep(300);
+    while (elapsed < maxWaitMs) {
+      var renderedItems = document.querySelectorAll(".menu-item, .menu-sub-item, .menu-with-title, [class*='menu-item']");
+      if (renderedItems.length >= 10) {
+        log("Hamburgermenyen er ferdig rendret med " + renderedItems.length + " elementer (etter " + elapsed + " ms).");
+        break;
+      }
+      await sleep(waitInterval);
+      elapsed += waitInterval;
+    }
+
+    if (elapsed >= maxWaitMs) {
+      log("Ventetid på meny-rendring utløp etter " + maxWaitMs + " ms. Fortsetter innsamling.");
+    }
+
+    // Rull eventuelle skuffer/drawers for å avdekke alle undermenyer
+    var drawers = document.querySelectorAll(".menu-container, .main-menu, [class*='drawer'], [class*='sidebar'], nav");
+    for (var d = 0; d < drawers.length; d++) {
+      var dr = drawers[d];
+      if (dr.scrollHeight > dr.clientHeight) {
+        dr.scrollTop = dr.scrollHeight;
+        await sleep(250);
       }
     }
 
-    // Samle inn og legg til lenkene i Browsertrix-køen
-    var totalAdded = await collectMenuLinks();
-    log("Åpnet hamburgermeny. Fant og la til " + totalAdded + " unike lenker i crawl-køen.");
+    // 7. Samle inn alle renderede lenker fra DOM-en
+    var newlyAdded = await collectDomLinks();
+    log("Ferdig med hamburgermeny. Totalt " + seenUrls.size + " unike lenker er lagt til i Browsertrix-køen.");
 
     if (ctx && ctx.state) {
-      ctx.state.linksQueued = totalAdded;
+      ctx.state.linksQueued = seenUrls.size;
       ctx.state.finished = true;
     }
 
-    yield getState("Hamburgermeny behandlet. La til " + totalAdded + " lenker i køen.", "linksQueued");
+    yield getState("Hamburgermeny behandlet. Totalt " + seenUrls.size + " lenker i køen.", "linksQueued");
   }
 }
 
