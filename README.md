@@ -61,3 +61,11 @@ Følgende scripts er tilgjengelige i dette prosjektet:
   - Sørger for at lazy-loading og IntersectionObservers trigger underveis.
   - Venter ved bunnen og oppdager om nytt innhold lastes inn dynamisk før den avslutter.
 
+### 8. Polaris Media Behavior (PolarisMediaBehavior)
+* **Fil:** `polaris-media.js`
+* **Mål:** Innhøsting av menyer på tvers av Polaris Media-nettaviser (Adresseavisen, Sunnmørsposten, Fædrelandsvennen, iTromsø, m.fl.).
+* **Hovedfunksjonalitet:**
+  - Håndterer og lukker eventuelle cookie-bannere.
+  - Finner og klikker på hoved-hamburgermenyen øverst til høyre (`button.menu-icon.main`).
+  - Ekstraherer alle avdekkede kategorier, seksjoner og emnelenker i menyen og legger dem til i Browsertrix' crawl-kø (`ctx.Lib.addLink`).
+
