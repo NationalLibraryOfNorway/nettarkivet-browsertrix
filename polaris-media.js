@@ -109,18 +109,27 @@ class PolarisMediaBehavior {
 
       for (var i = 0; i < scriptElements.length; i++) {
         var src = scriptElements[i].src || scriptElements[i].href || "";
-        var match = src.match(/_nuxt\/pox\.(?:global\.|bundles\.|front\.|server-side\.)?([a-f0-9]{15,40})\.js/i);
+        var match = src.match(/_nuxt\/pox\.(?:[a-zA-Z0-9_\-\/]+\.)?([a-f0-9]{15,40})\.js/i);
         if (match && match[1]) {
           hashes.add(match[1]);
         }
       }
 
+      // Let også etter hasher i inline HTML/skript
+      try {
+        var htmlText = document.documentElement.innerHTML;
+        var hexMatches = htmlText.match(/\"([a-f0-9]{20})\"/g) || [];
+        for (var hi = 0; hi < hexMatches.length; hi++) {
+          hashes.add(hexMatches[hi].replace(/\"/g, ""));
+        }
+      } catch (e) {}
+
       // Last inn og registrer meny- og søkekonponentene for alle identifiserte Webpack-hasher
       var hashArray = Array.from(hashes);
+      var moduleTypes = ["menu", "search", "user"];
+
       for (var h = 0; h < hashArray.length; h++) {
         var hash = hashArray[h];
-        var moduleTypes = ["menu", "search", "user"];
-
         for (var m = 0; m < moduleTypes.length; m++) {
           var scriptUrl = "/_nuxt/pox." + moduleTypes[m] + "." + hash + ".js";
           try {
@@ -131,14 +140,16 @@ class PolarisMediaBehavior {
             }
           } catch (e) {}
 
-          // Injiser også som <script>-tag for å sikre at Webpack JSONP registrerer modulen i nettleseren
-          await new Promise(function(resolve) {
-            var s = document.createElement("script");
-            s.src = scriptUrl;
-            s.onload = function() { resolve(); };
-            s.onerror = function() { resolve(); };
-            (document.head || document.documentElement).appendChild(s);
-          });
+          // Injiser som script-tag og vent på at nettleseren parser den
+          if (moduleTypes[m] === "menu" || moduleTypes[m] === "search") {
+            await new Promise(function(resolve) {
+              var s = document.createElement("script");
+              s.src = scriptUrl;
+              s.onload = function() { resolve(); };
+              s.onerror = function() { resolve(); };
+              (document.head || document.documentElement).appendChild(s);
+            });
+          }
         }
       }
 
