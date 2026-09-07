@@ -2,8 +2,9 @@
  * Polaris Media Behavior for Browsertrix
  * 
  * - Finner og klikker på hoved-hamburgermenyen øverst til høyre på Polaris Media-aviser
- *   (Adresseavisen, Sunnmørsposten, Fædrelandsvennen, iTromsø, Romsdals Budstikke, Harstad Tidende, m.fl.).
- * - Trigger og tar opp API-kallet (/client-api/menu/secondary) i WARC-arkivet slik at menyen fungerer i replay.
+ *   (Adresseavisen, Sunnmørsposten, Fædrelandsvennen, iTromsø, Harstad Tidende (ht.no), Romsdals Budstikke, m.fl.).
+ * - Prefetcher og arkiverer alle dynamiske Nuxt-komponenter (inkludert /_nuxt/pox.menu.<hash>.js)
+ *   og meny-API-er (/client-api/menu/secondary) slik at menyen fungerer fullverdig i replay uten 404-feil.
  * - Venter til Nuxt/Vue har ferdig-rendret alle menyelementer, underkategorier og emner i DOM-en.
  * - Samler inn og legger alle unike lenker inn i Browsertrix sin crawl-kø (ctx.Lib.addLink).
  */
@@ -101,20 +102,47 @@ class PolarisMediaBehavior {
 
     await dismissCookieConsent();
 
-    // 2. Eksplisitt hent meny-API-et slik at proxyen garantert tar det opp i WARC-en for replay
-    var prefetchMenuApi = async function() {
-      var apiEndpoints = [
-        "/client-api/menu/secondary",
-        "/client-api/menu/primary"
-      ];
-      for (var i = 0; i < apiEndpoints.length; i++) {
+    // 2. Eksplisitt hent og arkiver alle dynamiske Nuxt-komponenter og meny-API-er for replay
+    var prefetchNuxtMenuChunksAndApis = async function() {
+      var scriptSrcs = Array.from(document.querySelectorAll("script[src], link[href]")).map(function(el) {
+        return el.src || el.href || "";
+      });
+
+      // Finn alle unike Webpack/Nuxt-hasher fra eksisterende skript
+      var hashes = new Set();
+      for (var i = 0; i < scriptSrcs.length; i++) {
+        var src = scriptSrcs[i];
+        var match = src.match(/_nuxt\/pox\.(?:global\.|bundles\.|front\.|server-side\.)?([a-f0-9]{15,40})\.js/i);
+        if (match && match[1]) {
+          hashes.add(match[1]);
+        }
+      }
+
+      // Prefetch dynamiske Nuxt-moduler for meny, søk og bruker
+      var dynamicModules = ["menu", "search", "user", "drawer", "header"];
+      var urlsToPrefetch = [];
+
+      hashes.forEach(function(hash) {
+        dynamicModules.forEach(function(mod) {
+          urlsToPrefetch.push("/_nuxt/pox." + mod + "." + hash + ".js");
+        });
+      });
+
+      // API-endepunkter som leverer JSON-strukturen til menyen
+      urlsToPrefetch.push("/client-api/menu/secondary");
+      urlsToPrefetch.push("/client-api/menu/primary");
+      urlsToPrefetch.push("/client-api/menu/custom");
+
+      for (var u = 0; u < urlsToPrefetch.length; u++) {
+        var targetUrl = urlsToPrefetch[u];
         try {
-          var res = await window.fetch(apiEndpoints[i], { credentials: "same-origin" });
+          var res = await window.fetch(targetUrl, { credentials: "same-origin" });
           if (res.ok) {
-            var data = await res.json();
-            log("Prefetchet og arkiverte " + apiEndpoints[i] + " for replay.");
-            // Ekstraher også lenker direkte fra JSON-strukturen
-            extractLinksFromJson(data);
+            log("Arkiverte for replay: " + targetUrl);
+            if (targetUrl.includes("/client-api/")) {
+              var jsonData = await res.json();
+              extractLinksFromJson(jsonData);
+            }
           }
         } catch (e) {}
       }
@@ -227,8 +255,8 @@ class PolarisMediaBehavior {
       return added;
     };
 
-    log("Henter og arkiverer meny-API-er for replay-støtte...");
-    await prefetchMenuApi();
+    log("Henter og arkiverer Nuxt-menychunks og API-er for replay...");
+    await prefetchNuxtMenuChunksAndApis();
 
     log("Leter etter hoved-hamburgermenyen til høyre...");
     var menuBtn = findMainHamburgerButton();
@@ -250,23 +278,19 @@ class PolarisMediaBehavior {
       ctx.state.clicks++;
     }
 
-    // 6. Vent aktivt på at Nuxt/Vue rendrer alle seksjoner og kategorier i menyen (ikke bare søkefeltet)
+    // 6. Vent aktivt på at Nuxt/Vue ferdigstiller DOM-en (ikke bare søkefeltet)
     var maxWaitMs = 5000;
     var waitInterval = 150;
     var elapsed = 0;
 
     while (elapsed < maxWaitMs) {
       var renderedItems = document.querySelectorAll(".menu-item, .menu-sub-item, .menu-with-title, [class*='menu-item']");
-      if (renderedItems.length >= 10) {
+      if (renderedItems.length >= 6) {
         log("Hamburgermenyen er ferdig rendret med " + renderedItems.length + " elementer (etter " + elapsed + " ms).");
         break;
       }
       await sleep(waitInterval);
       elapsed += waitInterval;
-    }
-
-    if (elapsed >= maxWaitMs) {
-      log("Ventetid på meny-rendring utløp etter " + maxWaitMs + " ms. Fortsetter innsamling.");
     }
 
     // Rull eventuelle skuffer/drawers for å avdekke alle undermenyer
@@ -278,6 +302,9 @@ class PolarisMediaBehavior {
         await sleep(250);
       }
     }
+
+    // Ekstra hviletid for å sikre at alle bakgrunnsforespørsler (pox.menu.js og API-er) er ferdig skrevet til WARC
+    await sleep(2000);
 
     // 7. Samle inn alle renderede lenker fra DOM-en
     var newlyAdded = await collectDomLinks();
