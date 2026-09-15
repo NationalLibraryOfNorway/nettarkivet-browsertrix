@@ -14,6 +14,7 @@ class FacebookArchiveBehavior {
         commentsExtracted: 0,
         dialogsProcessed: 0,
         originalsRestored: 0,
+        photosHarvested: 0,
         scrolls: 0
       }
     };
@@ -111,7 +112,116 @@ class FacebookArchiveBehavior {
     revertToOriginalLanguage();
     await sleep(1500);
 
-    // 2. Traversal over innlegg på tidslinjen
+    const isPhotosPage = window.location.pathname.includes('/photos');
+
+    // 2A. Spesialisert håndtering for bildegalleriet (/photos)
+    if (isPhotosPage) {
+      ctx.log("Facebook Archive: Bildegalleri oppdaget (/photos)! Starter høsting av galleriet...");
+      const photoScrollRounds = 6;
+
+      for (let round = 0; round < photoScrollRounds; round++) {
+        ctx.state.scrolls = round + 1;
+        yield getState(ctx, `Ruller bildegalleri (runde ${round + 1}/${photoScrollRounds})`, "scrolls");
+
+        // Finn alle bilde-elementer i rutenettet
+        const photoLinks = Array.from(document.querySelectorAll([
+          'a[href*="/photo.php"]',
+          'a[href*="/photos/"]',
+          'a[href*="fbid="]'
+        ].join(', '))).filter(a => {
+          return a.querySelector('img') && !a.dataset.archivePhotoProcessed;
+        });
+
+        ctx.log(`Facebook Archive: Fant ${photoLinks.length} nye bilde-elementer i runde ${round + 1}`);
+
+        // Åpne opptil 2 bilder i Photo Theater for å fange full HD-oppløsning og bildetekst
+        for (const link of photoLinks.slice(0, 2)) {
+          link.dataset.archivePhotoProcessed = "true";
+          try {
+            ctx.log("Facebook Archive: Åpner bilde i Photo Theater for å fange full oppløsning...");
+            link.click();
+            await sleep(2000);
+
+            const photoDialog = document.querySelector('div[role="dialog"]');
+            if (photoDialog) {
+              ctx.state.photosHarvested++;
+              revertToOriginalLanguage();
+              await sleep(1000);
+
+              const closeBtn = photoDialog.querySelector([
+                'div[aria-label="Close"]',
+                'div[aria-label="Lukk"]',
+                'div[role="button"][aria-label="Close"]',
+                'div[role="button"][aria-label="Lukk"]',
+                '[aria-label="Lukk"]',
+                '[aria-label="Close"]'
+              ].join(', '));
+
+              if (closeBtn) {
+                closeBtn.click();
+              } else {
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27 }));
+              }
+              await sleep(1000);
+            }
+          } catch (e) {
+            ctx.log(`Facebook Archive: Feil ved åpning av bilde: ${e.message}`);
+          }
+        }
+
+        // Rull nedover galleriet
+        const scrollStep = Math.floor(window.innerHeight * 1.4);
+        window.scrollBy({ top: scrollStep, left: 0, behavior: "smooth" });
+        if (document.scrollingElement) {
+          document.scrollingElement.scrollTop += scrollStep;
+        }
+        window.dispatchEvent(new Event("scroll"));
+        await sleep(2000);
+
+        revertToOriginalLanguage();
+      }
+
+      // Se etter underfaner (f.eks. Album eller Opplastede bilder)
+      const subTabs = Array.from(document.querySelectorAll('a[role="tab"], div[role="tab"]')).filter(tab => {
+        const t = (tab.innerText || "").toLowerCase();
+        return (t.includes("album") || t.includes("opplast") || t.includes("upload")) && !tab.dataset.archiveTabVisited;
+      });
+
+      for (const tab of subTabs.slice(0, 2)) {
+        tab.dataset.archiveTabVisited = "true";
+        try {
+          ctx.log(`Facebook Archive: Klikker på underfane i galleriet: ${tab.innerText}...`);
+          tab.click();
+          await sleep(3000);
+          window.scrollBy({ top: 800, left: 0, behavior: "smooth" });
+          await sleep(2000);
+          revertToOriginalLanguage();
+        } catch (e) {}
+      }
+
+      // Lukk eventuelle åpne dialoger og rull til toppen for rent skjermbilde
+      const openDialogs = document.querySelectorAll('div[role="dialog"]');
+      for (const d of openDialogs) {
+        const cb = d.querySelector('div[aria-label="Close"], div[aria-label="Lukk"], div[role="button"][aria-label="Close"]');
+        if (cb) cb.click();
+      }
+      await sleep(1000);
+
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+      if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+      await sleep(2000);
+      revertToOriginalLanguage();
+      await sleep(1500);
+
+      ctx.log("================================================================================");
+      ctx.log("Facebook Archive: Bildegalleri høstet fullstendig!");
+      ctx.log(`Bilder åpnet i full oppløsning: ${ctx.state.photosHarvested}`);
+      ctx.log(`Tekster/bildetekster gjenopprettet til originalspråk: ${ctx.state.originalsRestored}`);
+      ctx.log("================================================================================");
+      return;
+    }
+
+    // 2B. Traversal over innlegg på tidslinjen
     const totalRounds = 8;
     for (let round = 0; round < totalRounds; round++) {
       ctx.state.scrolls = round + 1;
