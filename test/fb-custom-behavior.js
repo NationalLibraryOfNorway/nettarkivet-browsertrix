@@ -40,9 +40,11 @@ class FacebookArchiveBehavior {
       await sleep(500);
     }
 
-    // Hjelpefunksjon for å lukke generelle dialoger og cookie-bannere
+    // Hjelpefunksjon for å lukke generelle dialoger, innloggings-popups og cookie-bannere
     const dismissCookieAndModals = () => {
       let closed = 0;
+
+      // 1. Samtykkebannere for informasjonskapsler
       const cookieSelectors = [
         'div[role="button"][aria-label="Allow all cookies"]',
         'button[aria-label="Allow all cookies"]',
@@ -65,6 +67,36 @@ class FacebookArchiveBehavior {
           } catch (e) {}
         }
       }
+
+      // 2. Innloggings-popup / 'Se mer fra...'-dialog som blokkerer forsiden
+      const modalCloseSelectors = [
+        'div[aria-label="Close"]',
+        'div[aria-label="Lukk"]',
+        'div[role="button"][aria-label="Close"]',
+        'div[role="button"][aria-label="Lukk"]',
+        '[aria-label="Lukk"]',
+        '[aria-label="Close"]',
+        '[data-testid="close-button"]'
+      ];
+
+      for (const sel of modalCloseSelectors) {
+        const el = document.querySelector(sel);
+        if (el) {
+          try {
+            el.click();
+            closed++;
+            ctx.log(`Facebook Archive: Lukket popup/modal med selector: ${sel}`);
+          } catch (e) {}
+        }
+      }
+
+      // 3. Tastetrykk Escape for å lukke eventuelle overliggende modaler
+      try {
+        const escEvent = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true });
+        document.dispatchEvent(escEvent);
+        window.dispatchEvent(escEvent);
+      } catch (e) {}
+
       return closed;
     };
 
@@ -106,9 +138,41 @@ class FacebookArchiveBehavior {
       return count;
     };
 
+    // Hjelpefunksjon for å rydde opp modaler og overlays før slutt-skjermbilde
+    const cleanAllOverlays = () => {
+      const openDialogs = document.querySelectorAll('div[role="dialog"]');
+      for (const d of openDialogs) {
+        const cb = d.querySelector([
+          'div[aria-label="Close"]',
+          'div[aria-label="Lukk"]',
+          'div[role="button"][aria-label="Close"]',
+          'div[role="button"][aria-label="Lukk"]',
+          '[aria-label="Lukk"]',
+          '[aria-label="Close"]',
+          '[data-testid="close-button"]'
+        ].join(', '));
+        if (cb) {
+          try { cb.click(); } catch (e) {}
+        } else {
+          try {
+            d.style.display = "none";
+            if (d.parentElement && d.parentElement !== document.body) {
+              d.parentElement.style.display = "none";
+            }
+          } catch (e) {}
+        }
+      }
+      try {
+        if (document.body) document.body.style.overflow = "auto";
+        if (document.documentElement) document.documentElement.style.overflow = "auto";
+      } catch (e) {}
+    };
+
     await sleep(2000);
     dismissCookieAndModals();
     await sleep(1500);
+    dismissCookieAndModals();
+    await sleep(1000);
     revertToOriginalLanguage();
     await sleep(1500);
 
@@ -125,6 +189,8 @@ class FacebookArchiveBehavior {
 
         // Finn alle bilde-elementer i rutenettet
         const photoLinks = Array.from(document.querySelectorAll([
+          'a[href*="/photo/"]',
+          'a[href*="/photo?"]',
           'a[href*="/photo.php"]',
           'a[href*="/photos/"]',
           'a[href*="fbid="]'
@@ -200,11 +266,7 @@ class FacebookArchiveBehavior {
       }
 
       // Lukk eventuelle åpne dialoger og rull til toppen for rent skjermbilde
-      const openDialogs = document.querySelectorAll('div[role="dialog"]');
-      for (const d of openDialogs) {
-        const cb = d.querySelector('div[aria-label="Close"], div[aria-label="Lukk"], div[role="button"][aria-label="Close"]');
-        if (cb) cb.click();
-      }
+      cleanAllOverlays();
       await sleep(1000);
 
       window.scrollTo({ top: 0, left: 0, behavior: "instant" });
@@ -221,7 +283,107 @@ class FacebookArchiveBehavior {
       return;
     }
 
-    // 2B. Traversal over innlegg på tidslinjen
+    // 2B. Høsting av fotoboksen i venstremenyen på forsiden (Photos / Bilder widget)
+    ctx.log("Facebook Archive: Undersøker fotoseksjonen i venstremenyen på forsiden...");
+    dismissCookieAndModals();
+    await sleep(1000);
+
+    const photoCandidateSelectors = [
+      'a[href*="/photo/"]',
+      'a[href*="/photo?"]',
+      'a[href*="/photo.php"]',
+      'a[href*="/photos/"]',
+      'a[href*="fbid="]'
+    ].join(', ');
+
+    // Finn fotoboks-containeren spesifikt dersom mulig
+    let widgetPhotos = [];
+    const photoSectionHeaders = Array.from(document.querySelectorAll('h2, h3, span, div')).filter(el => {
+      const t = (el.innerText || "").trim().toLowerCase();
+      return (t === "bilder" || t === "photos") && el.children.length === 0;
+    });
+
+    for (const h of photoSectionHeaders) {
+      let container = h.closest('div[class*="x"]');
+      for (let p = 0; p < 6; p++) {
+        if (!container || !container.parentElement) break;
+        container = container.parentElement;
+        const imgs = Array.from(container.querySelectorAll(photoCandidateSelectors)).filter(a => a.querySelector('img'));
+        if (imgs.length >= 4) {
+          widgetPhotos = imgs;
+          ctx.log(`Facebook Archive: Fant fotoboks-container via overskriften "${h.innerText}" med ${imgs.length} bilder.`);
+          break;
+        }
+      }
+      if (widgetPhotos.length > 0) break;
+    }
+
+    const frontpagePhotoLinks = (widgetPhotos.length > 0 ? widgetPhotos : Array.from(document.querySelectorAll(photoCandidateSelectors)))
+      .filter(a => a.querySelector('img') && !a.dataset.archiveFrontpagePhoto);
+
+    ctx.log(`Facebook Archive: Fant ${frontpagePhotoLinks.length} bilde-elementer i fotoseksjonen på forsiden.`);
+
+    // Klikk gjennom bildene i fotoseksjonen (opptil 9 bilder) for å fange Photo Theater-dialoger og originaloppløsning
+    for (let i = 0; i < Math.min(frontpagePhotoLinks.length, 9); i++) {
+      const pLink = frontpagePhotoLinks[i];
+      pLink.dataset.archiveFrontpagePhoto = "true";
+      try {
+        ctx.log(`Facebook Archive: Åpner forside-bilde ${i + 1}/${Math.min(frontpagePhotoLinks.length, 9)} for å fange Photo Theater og full oppløsning...`);
+        pLink.scrollIntoView({ block: "center", behavior: "instant" });
+        await sleep(500);
+
+        pLink.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+        pLink.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+        await sleep(300);
+
+        pLink.click();
+        await sleep(2500);
+
+        const photoDialog = document.querySelector('div[role="dialog"]');
+        if (photoDialog) {
+          ctx.state.photosHarvested++;
+          revertToOriginalLanguage();
+          await sleep(1000);
+
+          const closeBtn = photoDialog.querySelector([
+            'div[aria-label="Close"]',
+            'div[aria-label="Lukk"]',
+            'div[role="button"][aria-label="Close"]',
+            'div[role="button"][aria-label="Lukk"]',
+            '[aria-label="Lukk"]',
+            '[aria-label="Close"]',
+            '[data-testid="close-button"]'
+          ].join(', '));
+
+          if (closeBtn) {
+            closeBtn.click();
+          } else {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+          }
+          await sleep(1200);
+        } else if (window.location.pathname.includes('/photo')) {
+          ctx.log("Facebook Archive: Bilde åpnet som egen side, returnerer med history.back()...");
+          await sleep(2000);
+          window.history.back();
+          await sleep(2000);
+        }
+      } catch (e) {
+        ctx.log(`Facebook Archive: Feil ved åpning av forside-bilde: ${e.message}`);
+      }
+    }
+
+    // Forhåndslast "See all photos" / "Se alle bilder" lenken
+    const seeAllPhotos = Array.from(document.querySelectorAll('a[href*="/photos"]')).find(a => {
+      const t = (a.innerText || "").toLowerCase();
+      return t.includes("photo") || t.includes("bilde");
+    });
+    if (seeAllPhotos) {
+      ctx.log("Facebook Archive: Trigger prefetch for 'See all photos'-lenken...");
+      seeAllPhotos.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await sleep(1000);
+    }
+
+    // 2C. Traversal over innlegg på tidslinjen
     const totalRounds = 8;
     for (let round = 0; round < totalRounds; round++) {
       ctx.state.scrolls = round + 1;
@@ -338,13 +500,9 @@ class FacebookArchiveBehavior {
       revertToOriginalLanguage();
     }
 
-    // Siste feierunde: Lukk eventuelle åpne dialoger, rull til toppen og reverser alle tekster til norsk
+    // Siste feierunde: Lukk eventuelle åpne dialoger og tvungne modaler, rull til toppen og reverser alle tekster til norsk
     ctx.log("Facebook Archive: Kjører slutt-feie for å sikre originalspråk over hele siden...");
-    const openDialogs = document.querySelectorAll('div[role="dialog"]');
-    for (const d of openDialogs) {
-      const cb = d.querySelector('div[aria-label="Close"], div[aria-label="Lukk"], div[role="button"][aria-label="Close"]');
-      if (cb) cb.click();
-    }
+    cleanAllOverlays();
     await sleep(1500);
 
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
