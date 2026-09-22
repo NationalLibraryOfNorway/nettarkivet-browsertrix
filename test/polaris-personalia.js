@@ -326,7 +326,12 @@ class PolarisPersonaliaBehavior {
       bottomWaitMs: 900,
       stableLimit: 3,
       maxPulses: Math.min(Math.max(totalPages * 3, 20), 120),
-      growthEps: 10
+      growthEps: 10,
+      // Ekstra "roligere" verifiseringsrunder etter at rullingen virker stabil. Nødvendig fordi
+      // listen under en enkelt gratulasjon/jubilant henter neste side via et sekundært XHR-kall
+      // som iblant er tregere enn de vanlige kategorisidene, og da ble rullingen avsluttet for tidlig.
+      settleRounds: 3,
+      settleWaitMs: 1500
     };
 
     let lastHeight = docHeight();
@@ -381,6 +386,31 @@ class PolarisPersonaliaBehavior {
           msg: `Rullepuls ${pulses}, y: ${currentY}/${newHeight}, antall innlegg i DOM: ${newLinkCount}, totalt i kø: ${this.queuedUrls.size}`
         });
       }
+    }
+
+    // Verifiseringsfase: dobbeltsjekk med lengre ventetid at ingen sene innlegg dukker opp
+    // etter at rullingen ser stabil ut (se kommentar ved cfg.settleRounds).
+    let settled = 0;
+    while (settled < cfg.settleRounds && pulses < cfg.maxPulses) {
+      window.scrollTo(0, docHeight());
+      window.dispatchEvent(new Event('scroll'));
+      await this.sleep(ctx, cfg.settleWaitMs);
+
+      await this.collectAndQueueLinks(ctx);
+
+      const verifyHeight = docHeight();
+      const verifyLinkCount = countItemLinks();
+
+      if (Math.abs(verifyHeight - lastHeight) < cfg.growthEps && verifyLinkCount === lastLinkCount) {
+        settled++;
+      } else {
+        this.log(ctx, { msg: `Nytt innhold dukket opp under verifisering, fortsetter rulling (i kø: ${this.queuedUrls.size})` });
+        settled = 0;
+        pulses++;
+      }
+
+      lastHeight = verifyHeight;
+      lastLinkCount = verifyLinkCount;
     }
 
     this.log(ctx, { msg: `Rulling fullført på ${pulses} pulses. Lagt til totalt ${this.queuedUrls.size} innleggslenker i Browsertrix-køen.` });
