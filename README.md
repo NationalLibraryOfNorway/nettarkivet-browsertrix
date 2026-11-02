@@ -43,8 +43,12 @@ Følgende scripts er tilgjengelige i dette prosjektet:
 * **Fil:** `amedia_personalia.js`
 * **Mål:** Spesialisert for innhøsting av Amedias personalia- og gratulasjonssider.
 * **Hovedfunksjonalitet:**
-  - Klikker på "vis flere" for å laste inn gratulasjoner.
-  - Klikker på enkeltsaker for å åpne modaler/lightboxes, lagrer innholdet, og lukker modalen igjen med ESC eller lukkeknapper.
+  - Kjører kun på listesiden (`/vis/personalia/greetings/all`), ikke på enkeltsider for hilsener.
+  - Fjerner samtykke-overlay og låst scrolling, og ruller til listen har vist alle kort ("Du har sett alle N.").
+  - Åpner hvert kort for å utløse detaljkallet mot Sanity, venter til detaljene er lastet, og lukker dialogen igjen.
+* **Begrensning:** Siden viser kun de 200 siste hilsenene (sortert på `happensOn`), så større aviser blir bare delvis høstet per kjøring.
+* **Anbefalt oppsett:** Scope `Single Page` med smart scoping av. Behavioren legger ikke til lenker i køen.
+* **Tid:** Ca. 60 sekunder for 200 kort ved testing. Crawlerens standard behavior timeout er 90 sekunder, så sjekk "Behavior Timeout" i workflowen.
 
 ### 6. AutoScroll (Standard & Consent Removal)
 * **Filer:** `autoscroll.js` og `removeconsent_autoscroll.js`
