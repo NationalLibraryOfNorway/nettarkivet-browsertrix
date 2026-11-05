@@ -45,35 +45,11 @@ class PolarisMediaBehavior {
       }
     };
 
-    var log = function(msg) {
-      if (ctx && typeof ctx.log === "function") {
-        ctx.log(msg);
-      } else if (ctx && ctx.Lib && typeof ctx.Lib.log === "function") {
-        ctx.Lib.log(msg);
-      } else {
-        console.log("[PolarisMedia] " + msg);
-      }
-    };
-
     var addLink = async function(url) {
       var fn = (ctx && ctx.Lib && ctx.Lib.addLink) || (ctx && ctx.addLink) || self["__bx_addLink"];
       if (typeof fn === "function") {
         await fn(url);
-      } else {
-        log("Advarsel: addLink er ikke tilgjengelig, lenke: " + url);
       }
-    };
-
-    var getState = function(msg, key) {
-      var fn = (ctx && ctx.Lib && ctx.Lib.getState) || (ctx && ctx.getState);
-      if (typeof fn === "function") {
-        if (ctx.Lib && ctx.Lib.getState === fn) {
-          return fn(ctx, msg, key);
-        } else {
-          return fn.call(ctx, msg, key);
-        }
-      }
-      return { state: key, msg: msg };
     };
 
     // 1. Iframe-håndtering (f.eks. Sourcepoint CMP samtykkebanner)
@@ -82,9 +58,7 @@ class PolarisMediaBehavior {
         var acceptBtn = document.querySelector('button.sp_choice_type_11, a.sp_choice_type_11, #onetrust-accept-btn-handler, .didomi-components-button-accept');
         if (acceptBtn) {
           acceptBtn.click();
-          log("Klikket på samtykkeknapp inni iframe.");
           if (ctx && ctx.state) ctx.state.cookieBannerHandled = true;
-          yield getState("Samtykkeboks håndtert inni iframe.", "cookieBannerHandled");
           return;
         }
 
@@ -98,9 +72,7 @@ class PolarisMediaBehavior {
             aria.includes("godta alle") || aria.includes("accept all")
           ) {
             buttons[i].click();
-            log("Klikket på samtykkeknapp (" + (text || aria) + ") inni iframe.");
             if (ctx && ctx.state) ctx.state.cookieBannerHandled = true;
-            yield getState("Samtykkeboks håndtert inni iframe.", "cookieBannerHandled");
             return;
           }
         }
@@ -114,7 +86,6 @@ class PolarisMediaBehavior {
         var acceptBtn = document.querySelector('button.sp_choice_type_11, a.sp_choice_type_11, #onetrust-accept-btn-handler, .didomi-components-button-accept');
         if (acceptBtn) {
           acceptBtn.click();
-          log("Lukket samtykkebanner i hovedvindu.");
           await sleep(600);
           return true;
         }
@@ -130,7 +101,6 @@ class PolarisMediaBehavior {
             aria.includes("godta alle") || aria.includes("accept all")
           ) {
             btn.click();
-            log("Lukket samtykkebanner i hovedvindu.");
             await sleep(600);
             return true;
           }
@@ -208,7 +178,6 @@ class PolarisMediaBehavior {
             var resp = await window.fetch(scriptUrl, { credentials: "same-origin" });
             if (resp.ok) {
               await resp.text(); // Sikre at hele HTTP-responsen overføres og lagres i WARC
-              log("Prefetchet og arkiverte " + scriptUrl);
             }
           } catch (e) {}
 
@@ -234,7 +203,6 @@ class PolarisMediaBehavior {
           var apiResp = await window.fetch(apiEndpoints[a], { credentials: "same-origin" });
           if (apiResp.ok) {
             var jsonData = await apiResp.json();
-            log("Prefetchet og arkiverte " + apiEndpoints[a]);
             extractLinksFromJson(jsonData);
           }
         } catch (e) {}
@@ -305,24 +273,19 @@ class PolarisMediaBehavior {
       return added;
     };
 
-    log("Laster inn og arkiverer Nuxt-menychunks og meny-API-er for replay...");
     await ensureNuxtMenuChunksAndApis();
 
-    log("Leter etter hoved-hamburgermenyen...");
     var menuBtn = findMainHamburgerButton();
 
     if (!menuBtn) {
-      log("Fant ikke hamburgermeny-knapp. Samler inn eksisterende navigasjonslenker.");
-      var fallbackCount = await collectDomLinks();
+      await collectDomLinks();
       if (ctx && ctx.state) {
         ctx.state.linksQueued = seenUrls.size;
         ctx.state.finished = true;
       }
-      yield getState("Fullført uten menyknapp (" + seenUrls.size + " lenker i kø)", "linksQueued");
       return;
     }
 
-    log("Klikker på hamburgermeny (" + (menuBtn.className || menuBtn.getAttribute("aria-label")) + ")...");
     menuBtn.click();
     if (ctx && ctx.state) {
       ctx.state.clicks++;
@@ -336,7 +299,6 @@ class PolarisMediaBehavior {
     while (elapsed < maxWaitMs) {
       var renderedItems = document.querySelectorAll(".menu-item, .menu-sub-item, .menu-with-title, [class*='menu-item']");
       if (renderedItems.length >= 5) {
-        log("Hamburgermenyen er ferdig rendret med " + renderedItems.length + " elementer (etter " + elapsed + " ms).");
         break;
       }
       await sleep(waitInterval);
@@ -356,14 +318,11 @@ class PolarisMediaBehavior {
     await sleep(1500);
 
     // 7. Samle inn alle renderede lenker fra DOM-en
-    var newlyAdded = await collectDomLinks();
-    log("Ferdig med hamburgermeny. Totalt " + seenUrls.size + " unike lenker er lagt til i Browsertrix-køen.");
+    await collectDomLinks();
 
     if (ctx && ctx.state) {
       ctx.state.linksQueued = seenUrls.size;
       ctx.state.finished = true;
     }
-
-    yield getState("Hamburgermeny behandlet. Totalt " + seenUrls.size + " lenker i køen.", "linksQueued");
   }
 }
